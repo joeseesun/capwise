@@ -1,9 +1,9 @@
-use super::{AvatarKind, Pose, paint::Portrait};
+use super::{AvatarKind, Pose, paint::Portrait, tracking::HeadFilter};
 use crate::NativeCameraFrame;
 use anyhow::{Context, anyhow};
 use cidre::{arc, cf, cm, cv, ns, vn, vt};
 use objc::{msg_send, sel, sel_impl};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 unsafe extern "C" {
     fn CVPixelBufferGetBaseAddress(buffer: &cv::PixelBuf) -> *mut u8;
@@ -67,7 +67,11 @@ struct Renderer {
     pose: Pose,
     target: Pose,
     start: Instant,
-    last_tracking: Option<Instant>,
+    last_tracking: Option<f64>,
+    last_frame: Option<(Instant, f64)>,
+    frame_clock: f64,
+    head_filter: HeadFilter,
+    neutral_mouth_width: Option<f64>,
     last_face: Option<Instant>,
     tracking_active: bool,
     handler: arc::R<vn::SequenceRequestHandler>,
@@ -84,6 +88,10 @@ impl Renderer {
             target: Pose::default(),
             start: Instant::now(),
             last_tracking: None,
+            last_frame: None,
+            frame_clock: 0.,
+            head_filter: HeadFilter::default(),
+            neutral_mouth_width: None,
             last_face: None,
             tracking_active: false,
             handler: vn::SequenceRequestHandler::new(),
@@ -91,7 +99,7 @@ impl Renderer {
         })
     }
 
-    fn track(&self, pixel: &cv::PixelBuf) -> anyhow::Result<Option<Pose>> {
+    fn track(&mut self, pixel: &cv::PixelBuf) -> anyhow::Result<Option<Pose>> {
         let class = objc::runtime::Class::get("VNDetectFaceLandmarksRequest")
             .context("Face tracking is unavailable")?;
         let raw: *mut objc::runtime::Object = unsafe { msg_send![class, new] };
@@ -117,38 +125,100 @@ impl Renderer {
         let Some(landmarks) = face.landmarks() else {
             return Ok(None);
         };
-        fn opening(
-            region: Option<arc::R<vn::FaceLandmarkRegion2d>>,
-            aspect: f64,
-            fallback: f32,
-        ) -> f32 {
-            let Some(region) = region else {
-                return fallback;
-            };
-            let points = region.normalized_points();
-            if points.len() < 3 {
-                return fallback;
-            }
-            let (mut min_x, mut min_y, mut max_x, mut max_y) =
-                (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-            for point in points {
-                min_x = min_x.min(point.x);
-                max_x = max_x.max(point.x);
-                min_y = min_y.min(point.y);
-                max_y = max_y.max(point.y);
-            }
-            ((max_y - min_y) / ((max_x - min_x) * aspect).max(0.001)) as f32
-        }
         let bounds = face.bounding_box().size;
         let aspect =
             bounds.width * pixel.width() as f64 / (bounds.height * pixel.height() as f64).max(1.);
+        let left_eye = landmarks.left_eye();
+        let right_eye = landmarks.right_eye();
+        let axis = left_eye
+            .as_ref()
+            .zip(right_eye.as_ref())
+            .and_then(|(left, right)| {
+                let center = |region: &vn::FaceLandmarkRegion2d| {
+                    let points = region.normalized_points();
+                    let (x, y) = points.iter().fold((0., 0.), |(x, y), point| {
+                        (x + point.x * aspect, y + point.y)
+                    });
+                    [
+                        x / points.len().max(1) as f64,
+                        y / points.len().max(1) as f64,
+                    ]
+                };
+                let left = center(left);
+                let right = center(right);
+                let dx = right[0] - left[0];
+                let dy = right[1] - left[1];
+                let length = dx.hypot(dy);
+                (length > 0.05).then(|| ([dx / length, dy / length], length))
+            });
+        let (horizontal, eye_distance) = axis.unwrap_or(([1., 0.], 0.));
+        let shape = |region: Option<arc::R<vn::FaceLandmarkRegion2d>>| {
+            let region = region?;
+            let points = region.normalized_points();
+            if points.len() < 3 {
+                return None;
+            }
+            let (mut left, mut right, mut bottom, mut top) = (
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+            );
+            let project = |point: &cidre::cg::Point| {
+                let x = point.x * aspect;
+                let y = point.y;
+                [
+                    x * horizontal[0] + y * horizontal[1],
+                    y * horizontal[0] - x * horizontal[1],
+                ]
+            };
+            let mut previous = project(points.last()?);
+            let mut area = 0.;
+            for point in points {
+                let [x, y] = project(point);
+                left = left.min(x);
+                right = right.max(x);
+                bottom = bottom.min(y);
+                top = top.max(y);
+                area += previous[0] * y - previous[1] * x;
+                previous = [x, y];
+            }
+            Some((right - left, top - bottom, area.abs() * 0.5))
+        };
+        let eye_opening =
+            |region| shape(region).map_or(0.25, |(width, height, _)| height / width.max(0.001));
+        let outer_width = shape(landmarks.outer_lips()).map(|(width, _, _)| width);
+        let mouth_opening = outer_width.zip(shape(landmarks.inner_lips())).map_or(
+            0.,
+            |(outer, (width, height, area))| {
+                let gap = 0.6 * height + 0.4 * area / width.max(0.001);
+                ((gap / outer.max(0.001) - 0.032) / 0.37).clamp(0., 1.)
+            },
+        );
+        let mouth_width = outer_width
+            .filter(|_| eye_distance > 0.05)
+            .map(|width| width / eye_distance)
+            .filter(|ratio| (0.32..=1.40).contains(ratio))
+            .map_or(0., |ratio| {
+                if mouth_opening < 0.08 {
+                    let neutral = self.neutral_mouth_width.get_or_insert(ratio);
+                    *neutral += (ratio - *neutral) * 0.045;
+                }
+                let neutral = self.neutral_mouth_width.unwrap_or(0.76);
+                ((ratio / neutral - 1.) / 0.30).clamp(-1., 1.)
+            });
         Ok(Some(Pose {
-            yaw: face.yaw().map_or(0., |v| v.as_f64() as f32 / 0.7),
-            pitch: face.pitch().map_or(0., |v| v.as_f64() as f32 / 0.5),
-            roll: face.roll().map_or(0., |v| -v.as_f64() as f32),
-            left_eye: ((opening(landmarks.left_eye(), aspect, 0.25) - 0.08) / 0.19).clamp(0., 1.),
-            right_eye: ((opening(landmarks.right_eye(), aspect, 0.25) - 0.08) / 0.19).clamp(0., 1.),
-            mouth: ((opening(landmarks.inner_lips(), aspect, 0.) - 0.025) / 0.55).clamp(0., 1.),
+            yaw: face
+                .yaw()
+                .map_or(self.target.yaw, |v| v.as_f64() as f32 / 0.70),
+            pitch: face
+                .pitch()
+                .map_or(self.target.pitch, |v| v.as_f64() as f32 / 0.52),
+            roll: face.roll().map_or(self.target.roll, |v| -v.as_f64() as f32),
+            left_eye: ((eye_opening(left_eye) - 0.08) / 0.19).clamp(0., 1.) as f32,
+            right_eye: ((eye_opening(right_eye) - 0.08) / 0.19).clamp(0., 1.) as f32,
+            mouth: mouth_opening as f32,
+            mouth_width: mouth_width as f32,
             smile: 0.,
         }))
     }
@@ -160,17 +230,35 @@ impl Renderer {
             .image_buf()
             .context("Camera frame has no image")?;
         let now = Instant::now();
+        let pts = job.frame.sample_buf.pts().as_secs();
+        let dt = self
+            .last_frame
+            .replace((now, pts))
+            .map_or(1. / 30., |(last, previous_pts)| {
+                let capture_interval = pts - previous_pts;
+                if capture_interval.is_finite() && capture_interval > 0. {
+                    capture_interval
+                } else {
+                    now.saturating_duration_since(last).as_secs_f64()
+                }
+            });
+        self.frame_clock += dt.max(0.001);
         if self
             .last_tracking
-            .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_millis(66))
+            .is_none_or(|last| self.frame_clock - last >= 0.025)
         {
-            self.last_tracking = Some(now);
+            self.last_tracking = Some(self.frame_clock);
             match self.track(input) {
-                Ok(Some(pose)) => {
+                Ok(Some(mut pose)) => {
                     if !self.tracking_active {
                         tracing::info!("Cartoon camera face tracking active");
                         self.tracking_active = true;
                     }
+                    [pose.yaw, pose.pitch, pose.roll] = self.head_filter.update(
+                        [pose.yaw, pose.pitch, pose.roll],
+                        [self.pose.yaw, self.pose.pitch, self.pose.roll],
+                        self.frame_clock,
+                    );
                     self.target = pose;
                     self.last_face = Some(now);
                 }
@@ -179,22 +267,28 @@ impl Renderer {
             }
         }
         let elapsed = now.saturating_duration_since(self.start).as_secs_f32();
-        if self
-            .last_face
-            .is_none_or(|last| now.saturating_duration_since(last) > Duration::from_millis(600))
-        {
+        let missing = self.last_face.map_or(f32::INFINITY, |last| {
+            now.saturating_duration_since(last).as_secs_f32()
+        });
+        let mut target = self.target;
+        if missing > 0.09 {
+            target.mouth = 0.;
+            target.mouth_width = 0.;
+        }
+        if missing > 0.24 {
             if self.tracking_active {
                 tracing::info!("Cartoon camera holding neutral pose without a tracked face");
                 self.tracking_active = false;
             }
-            let blink = if elapsed % 4.3 < 0.16 { 0. } else { 1. };
-            self.target = Pose {
-                left_eye: blink,
-                right_eye: blink,
-                ..Pose::default()
-            };
+            let weight = 1. - ((missing - 0.24) / 0.42).clamp(0., 1.);
+            target.yaw *= weight;
+            target.pitch *= weight;
+            target.roll *= weight;
+            let blink = ((elapsed % 4.3 - 0.13).abs() / 0.075).clamp(0., 1.);
+            target.left_eye = blink;
+            target.right_eye = blink;
         }
-        self.pose.approach(self.target, 0.4);
+        self.pose.approach(target, dt.clamp(0.001, 0.1) as f32);
         self.portrait.draw(job.kind, self.pose, elapsed, job.split);
         let width = input.width();
         let height = input.height();

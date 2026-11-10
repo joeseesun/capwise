@@ -1,4 +1,7 @@
-use super::{AvatarKind, Pose};
+use super::{
+    AvatarKind, Pose,
+    motion::{HeadRig, sample},
+};
 use std::sync::OnceLock;
 use tiny_skia::{Color, FilterQuality, IntRect, Pixmap, PixmapPaint, Transform};
 
@@ -11,6 +14,7 @@ struct Artwork {
     eyes: [Region; 2],
     gaze: [f32; 2],
     mouth: Region,
+    head: HeadRig,
 }
 
 fn crop([x, y, width, height]: Region) -> IntRect {
@@ -29,7 +33,7 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
     let illustrated_expression = include_bytes!("art/illustrated-expression.png").as_slice();
     let presenters = include_bytes!("art/presenters.png").as_slice();
     let presenters_expression = include_bytes!("art/presenters-expression.png").as_slice();
-    let (cache, neutral, expression, split, bubble, eyes, gaze, mouth) = match kind {
+    let (cache, neutral, expression, split, bubble, eyes, gaze, mouth, head, neck_y) = match kind {
         AvatarKind::Raven => (
             &RAVEN,
             illustrated,
@@ -39,6 +43,8 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [[720, 133, 58, 35], [806, 133, 40, 35]],
             [0., 0.],
             [742, 176, 125, 57],
+            [646, 64, 213, 204],
+            298,
         ),
         AvatarKind::RetroRobot => (
             &ROBOT,
@@ -49,6 +55,8 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [[1182, 159, 51, 32], [1261, 159, 49, 32]],
             [0., 0.],
             [1213, 201, 69, 28],
+            [1131, 101, 226, 153],
+            295,
         ),
         AvatarKind::SilverPresenter => (
             &SILVER,
@@ -59,6 +67,8 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [[411, 331, 49, 43], [478, 330, 49, 43]],
             [-1.5, 1.5],
             [425, 398, 92, 38],
+            [353, 195, 235, 278],
+            517,
         ),
         AvatarKind::CurlyPresenter => (
             &CURLY,
@@ -69,6 +79,8 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [[315, 197, 64, 56], [402, 197, 65, 55]],
             [-4., 4.],
             [326, 294, 126, 47],
+            [210, 25, 320, 358],
+            424,
         ),
         AvatarKind::BlackSuitPresenter => (
             &BLACK_SUIT,
@@ -79,6 +91,8 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [[1041, 191, 66, 57], [1134, 190, 66, 57]],
             [-4., 4.],
             [1054, 290, 135, 50],
+            [973, 28, 300, 355],
+            424,
         ),
         AvatarKind::BlueJacketPresenter => (
             &BLUE_JACKET,
@@ -89,6 +103,8 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [[250, 154, 43, 27], [306, 153, 40, 27]],
             [0., 0.],
             [274, 204, 54, 29],
+            [194, 62, 197, 193],
+            284,
         ),
         _ => return None,
     };
@@ -107,6 +123,7 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             eyes: eyes.map(relative),
             gaze,
             mouth: relative(mouth),
+            head: HeadRig::new(relative(head), neck_y - split[1]),
         }
     }))
 }
@@ -192,13 +209,38 @@ fn extend_background(frame: &Pixmap) -> Pixmap {
     canvas
 }
 
-pub(super) fn draw(
-    target: &mut Pixmap,
-    kind: AvatarKind,
-    pose: Pose,
-    elapsed: f32,
-    split: bool,
-) -> bool {
+fn shape_mouth(frame: &mut Pixmap, [x, y, width, height]: Region, pose: Pose) {
+    let spread = pose.mouth_width * (0.08 + 0.26 * pose.mouth);
+    let opening = (pose.mouth - 0.45).max(0.) * 0.48;
+    if spread.abs() + opening < 0.015 {
+        return;
+    }
+    let rect = crop([x, y, width, height]);
+    let original = frame.clone_rect(rect).expect("mouth within artwork");
+    let stride = frame.width() as usize * 4;
+    let half_width = (width - 1) as f32 * 0.5;
+    let half_height = (height - 1) as f32 * 0.5;
+    for row in 0..height {
+        let dy = row as f32 - half_height;
+        let vertical = 1. - (dy / half_height).powi(2);
+        let start = (y + row) as usize * stride + x as usize * 4;
+        let line = &mut frame.data_mut()[start..start + width as usize * 4];
+        for (col, pixel) in line.chunks_exact_mut(4).enumerate() {
+            let dx = col as f32 - half_width;
+            let influence = vertical * (1. - (dx / half_width).powi(2));
+            sample(
+                original.data(),
+                width as usize,
+                height as usize,
+                col as f32 - dx * spread * influence,
+                row as f32 - dy * opening * influence,
+                pixel,
+            );
+        }
+    }
+}
+
+pub(super) fn draw(target: &mut Pixmap, kind: AvatarKind, pose: Pose, split: bool) -> bool {
     let Some(artwork) = artwork(kind) else {
         return false;
     };
@@ -213,7 +255,7 @@ pub(super) fn draw(
         let closed = ((0.52 - opening) / 0.41).clamp(0., 1.);
         blend(&artwork.expression, &mut frame, eye, closed, true);
     }
-    let speaking = ((pose.mouth - 0.05) / 0.46).clamp(0., 1.);
+    let speaking = ((pose.mouth - 0.025) / 0.56).clamp(0., 1.);
     blend(
         &artwork.expression,
         &mut frame,
@@ -221,6 +263,8 @@ pub(super) fn draw(
         speaking,
         false,
     );
+    shape_mouth(&mut frame, artwork.mouth, pose);
+    let frame = artwork.head.render(frame, pose);
     let frame = if split {
         extend_background(&frame)
     } else {
@@ -239,15 +283,8 @@ pub(super) fn draw(
     ));
     let scale = size * 1.045 / frame.height() as f32;
     let width = frame.width() as f32 * scale;
-    let pivot = size * 0.5;
-    let transform = Transform::from_scale(scale, scale)
-        .post_translate((size - width) * 0.5, -size * 0.0225)
-        .post_concat(Transform::from_rotate_at(
-            pose.roll.to_degrees() * 0.15,
-            pivot,
-            pivot,
-        ))
-        .post_translate(pose.yaw * 9., pose.pitch * 7. + (elapsed * 1.7).sin() * 1.3);
+    let transform =
+        Transform::from_scale(scale, scale).post_translate((size - width) * 0.5, -size * 0.0225);
     target.draw_pixmap(
         0,
         0,

@@ -60,7 +60,7 @@ impl Portrait {
     }
 
     pub fn draw(&mut self, kind: AvatarKind, pose: Pose, elapsed: f32, split: bool) {
-        if super::illustrated::draw(&mut self.pixels, kind, pose, elapsed, split) {
+        if super::illustrated::draw(&mut self.pixels, kind, pose, split) {
             return;
         }
         let (fur, dark, background, shirt) = match kind {
@@ -93,8 +93,17 @@ impl Portrait {
         );
         self.oval([300., 516. + breath, 40., 40.], 0xf6eee0, still);
         self.oval([315., 527. + breath, 10., 16.], shirt, still);
-        let head = Transform::from_rotate_at(pose.roll.to_degrees(), 320., 340.)
-            .post_translate(pose.yaw * 18., pose.pitch * 12. + breath);
+        let yaw = pose.yaw * 0.38;
+        let pitch = pose.pitch * 0.30;
+        let head = Transform::from_scale(yaw.cos(), pitch.cos())
+            .pre_translate(-320., -460.)
+            .post_translate(320., 460.)
+            .post_concat(Transform::from_rotate_at(
+                pose.roll.to_degrees() * 0.65,
+                320.,
+                460.,
+            ))
+            .post_translate(yaw.sin() * 22., pitch.sin() * 17. + breath);
         if kind == AvatarKind::Bear {
             self.oval([165., 170., 104., 110.], fur, head);
             self.oval([371., 170., 104., 110.], fur, head);
@@ -121,10 +130,15 @@ impl Portrait {
         self.oval([174., 205., 292., 280.], dark, head);
         self.oval([176., 199., 288., 274.], fur, head);
         self.oval([205., 345., 230., 112.], 0xf6eee0, head);
-        let face = Transform::from_translate(pose.yaw * 27., pose.pitch * 13.).post_concat(head);
-        for (x, eye) in [(258., pose.left_eye), (382., pose.right_eye)] {
-            let height = 5. + eye * 35.;
-            self.oval([x - 14., 311. - height / 2., 28., height], 0x293638, face);
+        let face = Transform::from_translate(yaw.sin() * 63., pitch.sin() * 44.).post_concat(head);
+        for (x, eye, side) in [(258., pose.left_eye, -1.), (382., pose.right_eye, 1.)] {
+            let height = 4. + eye * 36.;
+            let width = 28. * (1. + side * yaw.sin() * 0.30);
+            self.oval(
+                [x - width / 2., 311. - height / 2., width, height],
+                0x293638,
+                face,
+            );
             if eye > 0.4 {
                 self.oval([x - 7., 299., 7., 9.], 0xffffff, face);
             }
@@ -138,27 +152,22 @@ impl Portrait {
         self.oval([220., 346., 32., 14.], 0xdcae9b, face);
         self.oval([390., 346., 32., 14.], 0xdcae9b, face);
         self.oval([306., 347., 28., 18.], 0x293638, face);
-        if pose.mouth > 0.08 {
+        let mouth_width = 50. * (1. + pose.mouth_width * 0.34);
+        let mouth_height = 4. + pose.mouth * 39.;
+        self.oval(
+            [320. - mouth_width * 0.5, 384., mouth_width, mouth_height],
+            0x463139,
+            face,
+        );
+        if mouth_height > 12. {
             self.oval(
                 [
-                    297. - pose.smile * 5.,
-                    381.,
-                    46. + pose.smile * 10.,
-                    9. + pose.mouth * 43.,
+                    320. - mouth_width * 0.24,
+                    384. + mouth_height * 0.62,
+                    mouth_width * 0.48,
+                    mouth_height * 0.25,
                 ],
-                0x463139,
-                face,
-            );
-            self.oval(
-                [307., 390. + pose.mouth * 22., 26., 6. + pose.mouth * 12.],
                 0xd99596,
-                face,
-            );
-        } else {
-            self.curve(
-                [291., 385., 320., 402. + pose.smile * 7., 349., 385.],
-                0x463139,
-                5.,
                 face,
             );
         }

@@ -8,7 +8,11 @@ pub(crate) use macos::AvatarWorker;
 #[cfg(any(target_os = "macos", test))]
 mod illustrated;
 #[cfg(any(target_os = "macos", test))]
+mod motion;
+#[cfg(any(target_os = "macos", test))]
 mod paint;
+#[cfg(any(target_os = "macos", test))]
+mod tracking;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,6 +112,7 @@ pub(crate) struct Pose {
     pub left_eye: f32,
     pub right_eye: f32,
     pub mouth: f32,
+    pub mouth_width: f32,
     pub smile: f32,
 }
 
@@ -121,6 +126,7 @@ impl Default for Pose {
             left_eye: 1.,
             right_eye: 1.,
             mouth: 0.,
+            mouth_width: 0.,
             smile: 0.,
         }
     }
@@ -128,27 +134,27 @@ impl Default for Pose {
 
 #[cfg(any(target_os = "macos", test))]
 impl Pose {
-    pub fn approach(&mut self, next: Self, amount: f32) {
-        fn blend(old: &mut f32, next: f32, amount: f32) {
-            if next.is_finite() {
-                *old += (next - *old) * amount;
+    pub fn approach(&mut self, next: Self, dt: f32) {
+        fn blend(current: &mut f32, target: f32, hz: f32, dt: f32) {
+            if target.is_finite() {
+                let alpha = 1. - (-std::f32::consts::TAU * hz * dt).exp();
+                *current += (target - *current) * alpha;
             }
         }
-        blend(&mut self.yaw, next.yaw.clamp(-1., 1.), amount);
-        blend(&mut self.pitch, next.pitch.clamp(-1., 1.), amount);
-        blend(&mut self.roll, next.roll.clamp(-0.5, 0.5), amount);
+
+        blend(&mut self.yaw, next.yaw.clamp(-1., 1.), 9., dt);
+        blend(&mut self.pitch, next.pitch.clamp(-1., 1.), 9., dt);
+        blend(&mut self.roll, next.roll.clamp(-0.5, 0.5), 9., dt);
+        blend(&mut self.left_eye, next.left_eye.clamp(0., 1.), 22., dt);
+        blend(&mut self.right_eye, next.right_eye.clamp(0., 1.), 22., dt);
+        blend(&mut self.mouth, next.mouth.clamp(0., 1.), 22., dt);
         blend(
-            &mut self.left_eye,
-            next.left_eye.clamp(0., 1.),
-            amount.max(0.65),
+            &mut self.mouth_width,
+            next.mouth_width.clamp(-1., 1.),
+            15.,
+            dt,
         );
-        blend(
-            &mut self.right_eye,
-            next.right_eye.clamp(0., 1.),
-            amount.max(0.65),
-        );
-        blend(&mut self.mouth, next.mouth.clamp(0., 1.), amount.max(0.65));
-        blend(&mut self.smile, next.smile.clamp(0., 1.), amount);
+        blend(&mut self.smile, next.smile.clamp(0., 1.), 12., dt);
     }
 }
 
