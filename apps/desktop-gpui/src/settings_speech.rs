@@ -25,7 +25,6 @@ const VOICES: &[(&str, &str)] = &[
     ("zh_female_xiaohe_uranus_bigtts", "小何 2.0"),
     ("zh_male_m191_uranus_bigtts", "云舟 2.0"),
     ("zh_male_taocheng_uranus_bigtts", "小天 2.0"),
-    ("zh_female_liuchangnvsheng_uranus_bigtts", "流畅女声 2.0"),
     ("zh_male_shenyeboke_uranus_bigtts", "深夜播客 2.0"),
     ("en_male_tim_uranus_bigtts", "Tim"),
     ("en_female_dacey_uranus_bigtts", "Dacey"),
@@ -230,10 +229,15 @@ impl SettingsWindow {
                 let audio = speech::synthesize(&settings, &key, preview_text, false)
                     .await
                     .map_err(|error| {
+                        tracing::warn!(%error, "Doubao voice preview failed");
+                        let message = tr::settings::speech::preview_failed();
                         if source == Credential::Recognition {
-                            format!("{} {error}", tr::settings::speech::recognition_permission())
+                            format!(
+                                "{message} {}",
+                                tr::settings::speech::recognition_permission()
+                            )
                         } else {
-                            error
+                            message.into()
                         }
                     })?;
                 tokio::task::spawn_blocking(move || play_preview(audio.wav, cancel.as_deref()))
