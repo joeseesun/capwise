@@ -274,6 +274,7 @@ pub struct TeleprompterWindow {
     /// The line a first click brought to the reading line, so the second click
     /// of a double click edits that line rather than whatever moved under it.
     clicked_offset: Option<usize>,
+    manual_anchor: Option<usize>,
     last_phase: Phase,
     snap_task: Option<gpui::Task<()>>,
     playback_state: PlaybackState,
@@ -469,6 +470,7 @@ impl TeleprompterWindow {
             toast: None,
             toast_task: None,
             clicked_offset: None,
+            manual_anchor: None,
             last_phase,
             snap_task: None,
             playback_state,
@@ -664,6 +666,7 @@ impl TeleprompterWindow {
         self.stop_playback();
         self.play_menu_open = false;
         self.editing = true;
+        self.manual_anchor = None;
         let at = at.or_else(|| self.reading_offset(cx));
         self.script_input.update(cx, |input, cx| {
             input.set_disabled(false, cx);
@@ -706,7 +709,12 @@ impl TeleprompterWindow {
 
     /// A click on the script while reading: one click reads from that line,
     /// two edit it.
-    fn script_clicked(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn script_clicked(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.editing {
             return;
         }
@@ -727,6 +735,7 @@ impl TeleprompterWindow {
             return;
         };
         self.clicked_offset = Some(offset);
+        self.manual_anchor = Some(offset);
         let following = self.follow_active();
         self.pause_follow();
         self.bring_to_reading_line(offset, cx);
@@ -778,6 +787,9 @@ impl TeleprompterWindow {
             self.stop_follow();
             self.stop_playback();
             self.voice_mode = voice;
+            if !voice {
+                self.manual_anchor = None;
+            }
         }
         window.focus(&self.focus, cx);
         cx.notify();
@@ -785,6 +797,7 @@ impl TeleprompterWindow {
 
     /// Back to the top, ready to read again.
     fn restart(&mut self, cx: &mut Context<Self>) {
+        self.manual_anchor = None;
         self.pause_follow();
         self.stop_playback();
         self.position = 0.;
@@ -1049,13 +1062,14 @@ impl TeleprompterWindow {
         let plain = !modifiers.platform && !modifiers.control && !modifiers.alt;
         match key {
             "space" if plain => self.play_pressed(window, cx),
+            "v" if plain => self.set_voice_mode(!self.voice_mode, window, cx),
+            "left" if plain && self.voice_mode => self.seek_sentence(-1, window, cx),
+            "right" if plain && self.voice_mode => self.seek_sentence(1, window, cx),
             "up" if plain => self.change_speed(WPM_KEY_STEP, window, cx),
             "down" if plain => self.change_speed(-WPM_KEY_STEP, window, cx),
             "home" if plain => self.restart(cx),
             "enter" if plain => self.enter_editing(None, window, cx),
-            "=" | "+" if modifiers.platform => {
-                self.change_font_size(FONT_SIZE_STEP, window, cx)
-            }
+            "=" | "+" if modifiers.platform => self.change_font_size(FONT_SIZE_STEP, window, cx),
             "-" if modifiers.platform => self.change_font_size(-FONT_SIZE_STEP, window, cx),
             _ => return,
         }
@@ -1181,6 +1195,7 @@ impl TeleprompterWindow {
                     // carries on from wherever the text is put. Voice follow
                     // would pull it back, so that pauses.
                     .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                        this.manual_anchor = None;
                         this.pause_follow();
                         cx.notify();
                     }))
@@ -1220,19 +1235,13 @@ impl TeleprompterWindow {
                     .child(div().h(px(spacer)).flex_shrink_0()),
             )
             .when(reading, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .h(px(fade))
-                        .bg(linear_gradient(
-                            180.,
-                            linear_color_stop(wash(0.92), 0.),
-                            linear_color_stop(wash(0.5), 1.),
-                        )),
-                )
+                this.child(div().absolute().top_0().left_0().right_0().h(px(fade)).bg(
+                    linear_gradient(
+                        180.,
+                        linear_color_stop(wash(0.92), 0.),
+                        linear_color_stop(wash(0.5), 1.),
+                    ),
+                ))
                 .child(
                     div()
                         .absolute()
@@ -1301,19 +1310,50 @@ impl TeleprompterWindow {
                     .child(div().truncate().child(copy::keys_hint())),
             )
             .child(
-                ui::Button::plain(&theme, "prompter-done", ui::ButtonVariant::Primary, ui::ButtonSize::Sm)
-                    .label(copy::done())
-                    .disabled(!self.has_script())
-                    .on_click(cx.listener(|this, _, window, cx| this.enter_reading(window, cx))),
+                ui::Button::plain(
+                    &theme,
+                    "prompter-done",
+                    ui::ButtonVariant::Primary,
+                    ui::ButtonSize::Sm,
+                )
+                .label(copy::done())
+                .disabled(!self.has_script())
+                .on_click(cx.listener(|this, _, window, cx| this.enter_reading(window, cx))),
             )
     }
 
-    /// Reading: play, speed, time left, text size and Edit, in one pill that
-    /// shows while the pointer is over the window and hides while reading.
+    fn reading_transport(&self, cx: &mut Context<Self>) -> ui::IconButton {
+        use tr::dialog::teleprompter::follow as copy;
+        let running = self.running();
+        let (icon, label) = match (running, self.voice_mode) {
+            (true, _) => ("icons/pause.svg", copy::pause_action()),
+            (false, true) => ("icons/microphone.svg", copy::start_action()),
+            (false, false) => ("icons/play.svg", copy::scroll_action()),
+        };
+        self.tool_button(
+            "playback",
+            icon,
+            false,
+            cx.listener(|this, _, window, cx| this.play_pressed(window, cx)),
+        )
+        .accessible_name(label)
+        .size(px(30.))
+        .color(Hsla::from(self.theme.gray_1))
+        .filled(Hsla::from(self.theme.gray_12), None)
+        .hover_bg(Hsla::from(self.theme.gray_11))
+    }
+
+    /// Voice controls stay visible during capture so Pause is always reachable.
     fn render_reading_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         use tr::dialog::teleprompter::assist as copy;
         let running = self.running();
-        if running && !self.bar_awake && !self.over_bar && !self.play_menu_open && !self.dragging {
+        if !self.voice_mode
+            && running
+            && !self.bar_awake
+            && !self.over_bar
+            && !self.play_menu_open
+            && !self.dragging
+        {
             return None;
         }
         let theme = self.theme;
@@ -1353,44 +1393,33 @@ impl TeleprompterWindow {
             .border_color(Theme::with_alpha(theme.gray_12, 0.08))
             .bg(Hsla::from(theme.gray_2))
             .shadow_md()
-            .child(
-                div()
-                    .id("playback")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(30.))
-                    .flex_shrink_0()
-                    .rounded_full()
-                    .bg(Hsla::from(theme.gray_12))
-                    .hover(|style| style.opacity(0.85))
-                    .on_click(cx.listener(|this, _, window, cx| this.play_pressed(window, cx)))
-                    .child(
-                        svg()
-                            .path(if running {
-                                "icons/pause.svg"
-                            } else if self.voice_mode {
-                                "icons/microphone.svg"
-                            } else {
-                                "icons/play.svg"
-                            })
-                            .size(px(14.))
-                            .text_color(Hsla::from(theme.gray_1)),
-                    ),
-            )
-            .child(
-                self.tool_button(
-                    "prompter-mode",
-                    "icons/chevron-up.svg",
-                    self.play_menu_open,
-                    cx.listener(|this, _, _, cx| {
-                        this.play_menu_open = !this.play_menu_open;
-                        cx.notify();
-                    }),
+            .child(self.reading_transport(cx))
+            .when(self.voice_mode, |bar| {
+                bar.child(
+                    self.button("prompter-mode", tr::dialog::teleprompter::follow::title())
+                        .right_icon("icons/chevron-up.svg")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.play_menu_open = !this.play_menu_open;
+                            cx.notify();
+                        })),
                 )
-                .size(px(22.))
-                .icon_size(px(12.)),
-            )
+            })
+            .when(!self.voice_mode, |bar| {
+                bar.child(
+                    self.tool_button(
+                        "prompter-mode",
+                        "icons/chevron-up.svg",
+                        self.play_menu_open,
+                        cx.listener(|this, _, _, cx| {
+                            this.play_menu_open = !this.play_menu_open;
+                            cx.notify();
+                        }),
+                    )
+                    .accessible_name(tr::dialog::teleprompter::follow::scroll_mode())
+                    .size(px(22.))
+                    .icon_size(px(12.)),
+                )
+            })
             .child(divider())
             .when(!self.voice_mode, |bar| {
                 // The thumb's centre sits on the track's ends, so half of it
@@ -1399,15 +1428,38 @@ impl TeleprompterWindow {
                     .child(div().px(px(7.)).child(self.render_range(cx)))
                     .child(label(copy::faster()))
             })
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .min_w(px(52.))
-                    .text_center()
-                    .text_size(px(11.))
-                    .text_color(Hsla::from(theme.gray_10))
-                    .child(copy::remaining(format_duration(left))),
-            )
+            .when(self.voice_mode, |bar| {
+                use tr::dialog::teleprompter::follow as copy;
+                bar.child(
+                    self.tool_button(
+                        "prompter-previous-sentence",
+                        "icons/chevron-left.svg",
+                        false,
+                        cx.listener(|this, _, window, cx| this.seek_sentence(-1, window, cx)),
+                    )
+                    .accessible_name(copy::previous_sentence()),
+                )
+                .child(
+                    self.tool_button(
+                        "prompter-next-sentence",
+                        "icons/chevron-right.svg",
+                        false,
+                        cx.listener(|this, _, window, cx| this.seek_sentence(1, window, cx)),
+                    )
+                    .accessible_name(copy::next_sentence()),
+                )
+            })
+            .when(!self.voice_mode, |bar| {
+                bar.child(
+                    div()
+                        .flex_shrink_0()
+                        .min_w(px(52.))
+                        .text_center()
+                        .text_size(px(11.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(copy::remaining(format_duration(left))),
+                )
+            })
             .child(divider())
             .child(self.tool_button(
                 "font-smaller",
@@ -1436,9 +1488,9 @@ impl TeleprompterWindow {
             .child(
                 self.button("prompter-edit", copy::edit())
                     .icon("icons/pencil.svg")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.enter_editing(None, window, cx)
-                    })),
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.enter_editing(None, window, cx)),
+                    ),
             );
         Some(
             div()
@@ -1450,7 +1502,11 @@ impl TeleprompterWindow {
                 .flex_col()
                 .items_center()
                 .gap(px(6.))
-                .children(self.voice_mode.then(|| self.render_follow_status(cx)).flatten())
+                .children(
+                    self.voice_mode
+                        .then(|| self.render_follow_status(cx))
+                        .flatten(),
+                )
                 .child(bar)
                 .into_any_element(),
         )
@@ -1466,6 +1522,10 @@ impl TeleprompterWindow {
         let item = |id: &'static str, title: &'static str, note: &'static str, on: bool| {
             div()
                 .id(id)
+                .role(gpui::Role::Button)
+                .aria_label(title)
+                .tab_index(0)
+                .tab_stop(true)
                 .flex()
                 .flex_row()
                 .items_start()
@@ -1513,9 +1573,9 @@ impl TeleprompterWindow {
                         copy::mode_scroll_note(),
                         !self.voice_mode,
                     )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.set_voice_mode(false, window, cx)
-                    })),
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.set_voice_mode(false, window, cx)),
+                    ),
                 )
                 .child(
                     item(
@@ -1524,9 +1584,9 @@ impl TeleprompterWindow {
                         follow::privacy_copy(),
                         self.voice_mode,
                     )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.set_voice_mode(true, window, cx)
-                    })),
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.set_voice_mode(true, window, cx)),
+                    ),
                 )
                 .into_any_element(),
         )
@@ -1578,10 +1638,12 @@ impl TeleprompterWindow {
             .row_width(px(56.))
             .track(px(4.), Theme::with_alpha(self.theme.gray_12, 0.10))
             .thumb(px(12.), Hsla::from(self.theme.gray_12), None)
-            .on_drag_start(cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                this.dragging = true;
-                this.set_slider_from(event.position, window, cx);
-            }))
+            .on_drag_start(
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.dragging = true;
+                    this.set_slider_from(event.position, window, cx);
+                }),
+            )
     }
 
     /// While the range is held the whole window takes the mouse, so a drag

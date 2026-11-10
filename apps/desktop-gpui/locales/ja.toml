@@ -3859,6 +3859,13 @@ apple_permission = "システム設定で Capwise の音声認識を許可して
 apple_unavailable = "この言語または Mac ではオンデバイス音声認識を利用できません。"
 apple_interrupted = "音声認識が中断されました。マイクボタンを選んで再試行してください。"
 apple_manual = "音声追従を一時停止しました。手動でスクロールできます。"
+waiting = "読み上げ待機中"
+pause_action = "一時停止"
+start_action = "音声追従を開始"
+scroll_action = "スクロールを開始"
+previous_sentence = "前の文"
+next_sentence = "次の文"
+scroll_mode = "スクロール方式"
 
 [editor.workbench]
 captions_hidden = "字幕はプレビューと書き出しで非表示になっています。"

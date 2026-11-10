@@ -3859,6 +3859,13 @@ apple_permission = "सिस्टम सेटिंग्स में Capwis
 apple_unavailable = "इस भाषा या Mac पर डिवाइस की वाक् पहचान उपलब्ध नहीं है।"
 apple_interrupted = "वाक् पहचान बाधित हुई। फिर से कोशिश करने के लिए माइक्रोफ़ोन बटन चुनें।"
 apple_manual = "वाक् अनुसरण रुका है। अब आप मैन्युअल रूप से स्क्रॉल कर सकते हैं।"
+waiting = "पढ़ने के लिए तैयार"
+pause_action = "रोकें"
+start_action = "वाक् अनुसरण शुरू करें"
+scroll_action = "स्क्रॉल शुरू करें"
+previous_sentence = "पिछला वाक्य"
+next_sentence = "अगला वाक्य"
+scroll_mode = "स्क्रॉल का तरीका"
 
 [editor.workbench]
 captions_hidden = "पूर्वावलोकन और निर्यात में उपशीर्षक छिपे हुए हैं।"

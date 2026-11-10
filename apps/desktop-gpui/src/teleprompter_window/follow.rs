@@ -54,6 +54,7 @@ enum FollowPhase {
     #[default]
     Off,
     Connecting,
+    Waiting,
     Listening,
     Paused(PauseReason),
     Failed(Failure),
@@ -68,7 +69,7 @@ pub(super) fn privacy_copy() -> &'static str {
 
 impl FollowPhase {
     fn active(self) -> bool {
-        matches!(self, Self::Connecting | Self::Listening)
+        matches!(self, Self::Connecting | Self::Waiting | Self::Listening)
     }
 
     fn label(self) -> &'static str {
@@ -78,6 +79,7 @@ impl FollowPhase {
             Self::Connecting => copy::apple_connecting(),
             #[cfg(not(target_os = "macos"))]
             Self::Connecting => copy::connecting(),
+            Self::Waiting => copy::waiting(),
             Self::Listening => copy::listening(),
             #[cfg(target_os = "macos")]
             Self::Paused(PauseReason::Manual) => copy::apple_manual(),
@@ -420,7 +422,7 @@ impl TeleprompterWindow {
             cx.notify();
             return;
         };
-        let Some(offset) = self.reading_offset(cx) else {
+        let Some(offset) = self.manual_anchor.or_else(|| self.reading_offset(cx)) else {
             self.follow.phase = FollowPhase::Failed(Failure::Layout);
             cx.notify();
             return;
@@ -472,7 +474,7 @@ impl TeleprompterWindow {
                             return false;
                         }
                         match event.event {
-                            StreamingEvent::Ready => this.follow.phase = FollowPhase::Listening,
+                            StreamingEvent::Ready => this.follow.phase = FollowPhase::Waiting,
                             StreamingEvent::Recognition(packet) => {
                                 this.follow_recognition(generation, packet, window, cx)
                             }
@@ -515,7 +517,12 @@ impl TeleprompterWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.follow.accepts(generation) || self.follow.phase != FollowPhase::Listening {
+        if !self.follow.accepts(generation)
+            || !matches!(
+                self.follow.phase,
+                FollowPhase::Waiting | FollowPhase::Listening
+            )
+        {
             return;
         }
         let Some(follower) = &mut self.follow.follower else {
@@ -554,10 +561,36 @@ impl TeleprompterWindow {
         };
         #[cfg(target_os = "macos")]
         let position = self.position.max(position);
+        self.manual_anchor = None;
+        self.follow.phase = FollowPhase::Listening;
         self.position = position;
         self.apply_scroll();
         window.refresh();
         cx.notify();
+    }
+
+    pub(super) fn seek_sentence(
+        &mut self,
+        direction: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(offset) = self.manual_anchor.or_else(|| self.reading_offset(cx)) else {
+            return;
+        };
+        let Ok(follower) = ScriptFollower::new(&self.state.script) else {
+            return;
+        };
+        let Some(target) = follower.adjacent_sentence_offset(offset, direction) else {
+            return;
+        };
+        if self.bring_to_reading_line(target, cx) {
+            self.manual_anchor = Some(target);
+            self.pause_follow();
+            self.stop_playback();
+            window.refresh();
+            cx.notify();
+        }
     }
 
     /// Voice follow's state over the reading bar, with the one fix a failure

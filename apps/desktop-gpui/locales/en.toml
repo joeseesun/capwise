@@ -3895,6 +3895,13 @@ apple_permission = "Allow Speech Recognition for Capwise in System Settings."
 apple_unavailable = "On-device speech recognition is unavailable for this language or Mac."
 apple_interrupted = "Speech recognition was interrupted. Select the microphone button to retry."
 apple_manual = "Voice follow is paused for manual scrolling."
+waiting = "Ready to follow"
+pause_action = "Pause"
+start_action = "Start voice follow"
+scroll_action = "Start scrolling"
+previous_sentence = "Previous sentence"
+next_sentence = "Next sentence"
+scroll_mode = "Scrolling mode"
 
 [editor.workbench]
 captions_hidden = "Captions are hidden in the preview and export."

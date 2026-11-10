@@ -3893,6 +3893,13 @@ apple_permission = "请在系统设置中允许灵录使用语音识别。"
 apple_unavailable = "当前语言或这台 Mac 暂不支持本机语音识别。"
 apple_interrupted = "语音识别已中断，点击麦克风按钮重试。"
 apple_manual = "语音跟读已暂停，可手动滚动。"
+waiting = "等待朗读"
+pause_action = "暂停"
+start_action = "开始语音跟读"
+scroll_action = "开始滚动"
+previous_sentence = "上一句"
+next_sentence = "下一句"
+scroll_mode = "滚动方式"
 
 [editor.workbench]
 captions_hidden = "字幕已隐藏，预览和导出都不显示。"
