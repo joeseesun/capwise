@@ -239,21 +239,47 @@ enum ZoomClusters {
 impl ZoomClusters {
     fn new(
         cursor_events: &CursorEvents,
+        pressed: &[(f64, Option<XY<f64>>)],
         moves_time_ordered: bool,
         recording_start: f64,
         recording_end: f64,
         segment: &ZoomSegment,
         crops: &CursorCropMaps,
     ) -> Self {
-        let build = |crop| {
-            ClusterCenters::new(build_clusters(
-                cursor_events,
-                moves_time_ordered,
-                recording_start,
-                recording_end,
-                segment.amount,
-                crop,
-            ))
+        let build = |crop: Option<CursorCropMap>| {
+            let start_ms = recording_start * 1000.0;
+            let end_ms = recording_end * 1000.0;
+            let start = pressed.partition_point(|(time, _)| *time < start_ms);
+            let end = pressed.partition_point(|(time, _)| *time <= end_ms);
+            let limit = 0.72 / segment.amount.max(1.0);
+            let mut clusters: Vec<ClickCluster> = Vec::new();
+            for &(time, position) in &pressed[start..end] {
+                let Some(position) = position else { continue };
+                let (x, y) = crop.map_or((position.x, position.y), |crop| {
+                    crop.map(position.x, position.y)
+                });
+                if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+                    continue;
+                }
+                if let Some(cluster) = clusters.last_mut()
+                    && cluster.can_add(x, y, limit, limit)
+                {
+                    cluster.add(x, y, time);
+                } else {
+                    clusters.push(ClickCluster::new(x, y, time));
+                }
+            }
+            if clusters.is_empty() {
+                clusters = build_clusters(
+                    cursor_events,
+                    moves_time_ordered,
+                    recording_start,
+                    recording_end,
+                    segment.amount,
+                    crop,
+                );
+            }
+            ClusterCenters::new(clusters)
         };
         let base = build(crops.base);
         let overlaps =
@@ -704,11 +730,18 @@ fn cursor_events_across_cut(
         .chain(carried)
         .collect();
     moves.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+    let clicks = cursor_events
+        .clicks
+        .iter()
+        .filter(|event| {
+            ranges.iter().any(|&(start, end, closed)| {
+                event.time_ms >= start && (event.time_ms < end || closed && event.time_ms == end)
+            })
+        })
+        .cloned()
+        .collect();
     Some((
-        CursorEvents {
-            moves,
-            clicks: Vec::new(),
-        },
+        CursorEvents { moves, clicks },
         recording_start,
         recording_end,
     ))
@@ -861,12 +894,18 @@ impl ZoomTransformTimeline {
         let mut zoom_segments = zoom_segments.to_vec();
         zoom_segments.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.end.total_cmp(&b.end)));
         let segment_index = ZoomSegmentIndex::new(&zoom_segments);
-        let moves_time_ordered = zoom_segments
+        let has_auto_zoom = zoom_segments
             .iter()
-            .any(|segment| matches!(segment.mode, ZoomMode::Auto))
+            .any(|segment| matches!(segment.mode, ZoomMode::Auto));
+        let moves_time_ordered = has_auto_zoom
             && cursor_events
                 .moves
                 .is_sorted_by(|a, b| a.time_ms <= b.time_ms);
+        let pressed = if has_auto_zoom && !cursor_events.clicks.is_empty() {
+            cursor_events.pressed_positions()
+        } else {
+            Vec::new()
+        };
 
         let time_map = if zoom_segments.is_empty() {
             Vec::new()
@@ -897,8 +936,12 @@ impl ZoomTransformTimeline {
                         Some((events, start, end)) => (events, *start, *end),
                         None => (cursor_events, recording_start, recording_end),
                     };
+                    let cut_pressed = cut
+                        .as_ref()
+                        .map(|(events, _, _)| events.pressed_positions());
                     Some(ZoomClusters::new(
                         events,
+                        cut_pressed.as_deref().unwrap_or(&pressed),
                         moves_time_ordered || cut.is_some(),
                         recording_start,
                         recording_end,
@@ -2376,12 +2419,7 @@ mod tests {
     }
 
     #[test]
-    fn hovering_into_a_corner_re_aims_without_a_click() {
-        // Regression for the real-recording report: clicks early near the
-        // center, then the cursor HOVERS (no click) into the bottom-right
-        // corner mid-segment. All movement participates in clustering, so
-        // leaving the dead-zone box must re-aim the camera and bring the
-        // hovered corner into the settled viewport.
+    fn hovering_into_a_corner_keeps_the_last_click_framed() {
         let corner = (0.95, 0.9);
         let mut moves = Vec::new();
         for i in 0..50 {
@@ -2406,30 +2444,14 @@ mod tests {
         let mut timeline = timeline_for(&segments, &cursor, 16.0);
         timeline.precompute();
 
-        // Two seconds after arriving in the corner the spring has settled.
         let settled = timeline.sample(8.0);
         let (left, top, size) = visible_viewport(&settled);
-        assert!(
-            corner.0 >= left && corner.0 <= left + size,
-            "hovered corner x {} outside viewport [{left}, {}]",
-            corner.0,
-            left + size
-        );
-        assert!(
-            corner.1 >= top && corner.1 <= top + size,
-            "hovered corner y {} outside viewport [{top}, {}]",
-            corner.1,
-            top + size
-        );
-
-        // And the framing genuinely moved from the early click-cluster view.
-        let early = timeline.sample(4.0);
-        let (early_left, early_top, _) = visible_viewport(&early);
-        assert!(
-            (left - early_left).abs() > 0.1 || (top - early_top).abs() > 0.1,
-            "camera never re-aimed toward the hovered corner"
-        );
-        assert_viewport_in_bounds(&settled, "corner hover settle");
+        let (early_left, early_top, _) = visible_viewport(&timeline.sample(4.0));
+        assert!((left - early_left).abs() < 0.001);
+        assert!((top - early_top).abs() < 0.001);
+        assert!((left..=left + size).contains(&0.5));
+        assert!(corner.0 > left + size);
+        assert_viewport_in_bounds(&settled, "corner hover");
     }
 
     #[test]
@@ -3043,6 +3065,7 @@ mod tests {
                         .max(start);
                 original.clusters[0] = Some(ZoomClusters::new(
                     &cursor,
+                    &cursor.pressed_positions(),
                     true,
                     start,
                     end,

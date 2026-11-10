@@ -3791,6 +3791,49 @@ impl ProjectUniforms {
         })
     }
 
+    pub fn auto_zoom_visible_fraction(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        scene: Option<&cap_project::SceneSegment>,
+    ) -> XY<f64> {
+        let Some(scene) = scene.filter(|scene| {
+            options.camera_size.is_some()
+                && !project.camera.hide
+                && matches!(scene.mode, SceneMode::SplitScreen | SceneMode::Floating)
+        }) else {
+            return XY::new(1.0, 1.0);
+        };
+        let params = scene.split_layout.unwrap_or_default();
+        if params.fit_screen {
+            return XY::new(1.0, 1.0);
+        }
+
+        let (width, height) = Self::get_base_size(options, project);
+        let width = width.max(1) as f32;
+        let height = height.max(1) as f32;
+        let horizontal = params.force_horizontal || width / height >= SPLIT_STACK_ASPECT_THRESHOLD;
+        let pane = if matches!(scene.mode, SceneMode::Floating) {
+            floating_split_panes(width, height, horizontal).0
+        } else if horizontal {
+            [0.0, 0.0, width * 0.5, height]
+        } else {
+            [0.0, 0.0, width, height * 0.5]
+        };
+        let crop = Self::get_crop(options, project);
+        let size = [crop.size.x.max(1) as f32, crop.size.y.max(1) as f32];
+        let visible = fit_crop_to_target(
+            [0.0, 0.0],
+            size,
+            (pane[2] - pane[0]) / (pane[3] - pane[1]).max(f32::EPSILON),
+            [0.5, 0.5],
+            params.screen_zoom as f32,
+        );
+        XY::new(
+            f64::from((visible[2] - visible[0]) / size[0]),
+            f64::from((visible[3] - visible[1]) / size[1]),
+        )
+    }
+
     #[allow(unused)]
     fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f64 {
         let crop = Self::get_crop(options, project);

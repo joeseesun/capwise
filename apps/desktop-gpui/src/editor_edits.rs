@@ -32,9 +32,9 @@ pub use cap_project::{
 
 use cap_project::{
     AudioTrackSegment, Camera3DProperties, Camera3DSegment, CaptionTrackSegment,
-    ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment, MaskSegment,
-    ProjectConfiguration, SceneMode, SceneSegment, ShapeSegment, TextSegment,
-    TimelineConfiguration, TimelineSegment, ZoomMode, ZoomSegment,
+    ClipSpeedAudioMode, GlideDirection, KeyboardTrackSegment, MaskSegment, ProjectConfiguration,
+    SceneMode, SceneSegment, ShapeSegment, TextSegment, TimelineConfiguration, TimelineSegment,
+    ZoomMode, ZoomSegment,
 };
 
 use crate::editor_timeline::{self, Segment, TrackKind};
@@ -2720,25 +2720,146 @@ pub fn clip_trim_end(
 
 pub const DEFAULT_AUTO_ZOOM_AMOUNT: f64 = 1.5;
 
-pub fn generate_zoom_segments_for_timeline(
-    clicks_by_clip: &[Vec<CursorClickEvent>],
-    timeline: &TimelineConfiguration,
+#[derive(Default)]
+pub(crate) struct AutoZoomClip {
+    pub positions: Vec<(f64, Option<cap_project::XY<f64>>)>,
+    pub screen_size: Option<cap_project::XY<u32>>,
+    pub has_camera: bool,
+}
+
+pub(crate) fn load_auto_zoom_clips(meta: &cap_project::RecordingMeta) -> Vec<AutoZoomClip> {
+    use cap_project::{CursorEvents, StudioRecordingMeta, XY};
+    let load =
+        |display: &cap_project::VideoMeta, cursor: Option<std::path::PathBuf>, has_camera| {
+            let Some(cursor) = cursor else {
+                return AutoZoomClip::default();
+            };
+            let positions = match CursorEvents::load_from_file(&cursor) {
+                Ok(events) => events.pressed_positions(),
+                Err(_) => CursorEvents::load_clicks_from_file(&cursor)
+                    .map(|clicks| {
+                        CursorEvents {
+                            clicks,
+                            moves: Vec::new(),
+                        }
+                        .pressed_positions()
+                    })
+                    .unwrap_or_default(),
+            };
+            let screen_size = (!positions.is_empty())
+                .then(|| cap_rendering::Video::new(meta.path(&display.path), 0.0).ok())
+                .flatten()
+                .map(|video| XY::new(video.width, video.height));
+            AutoZoomClip {
+                positions,
+                screen_size,
+                has_camera,
+            }
+        };
+    match meta.studio_meta() {
+        Some(StudioRecordingMeta::SingleSegment { segment }) => vec![load(
+            &segment.display,
+            segment.cursor.as_ref().map(|path| meta.path(path)),
+            segment.camera.is_some(),
+        )],
+        Some(StudioRecordingMeta::MultipleSegments { inner }) => inner
+            .segments
+            .iter()
+            .map(|segment| {
+                load(
+                    &segment.display,
+                    segment.cursor.as_ref().map(|path| meta.path(path)),
+                    segment.camera.is_some(),
+                )
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AutoZoomClick {
+    time: f64,
+    position: Option<cap_project::XY<f64>>,
+    viewport: cap_project::XY<f64>,
+    clip: u32,
+    scene: Option<usize>,
+}
+
+struct AutoZoomGroup {
+    first: AutoZoomClick,
+    last_time: f64,
+    bounds: Option<(cap_project::XY<f64>, cap_project::XY<f64>)>,
+}
+
+impl AutoZoomGroup {
+    fn new(click: AutoZoomClick) -> Self {
+        Self {
+            first: click,
+            last_time: click.time,
+            bounds: click.position.map(|point| (point, point)),
+        }
+    }
+
+    fn try_add(&mut self, click: AutoZoomClick, zoom_amount: f64) -> bool {
+        const MAX_CLICK_GAP: f64 = 2.5;
+        const MIN_GROUP_ZOOM: f64 = 1.2;
+        if click.clip != self.first.clip
+            || click.scene != self.first.scene
+            || click.time - self.last_time > MAX_CLICK_GAP
+        {
+            return false;
+        }
+        if let Some(point) = click.position {
+            let (min, max) = self.bounds.unwrap_or((point, point));
+            let min = cap_project::XY::new(min.x.min(point.x), min.y.min(point.y));
+            let max = cap_project::XY::new(max.x.max(point.x), max.y.max(point.y));
+            let span = max - min;
+            let limit = self.first.viewport * (AUTO_ZOOM_CONTEXT / zoom_amount.min(MIN_GROUP_ZOOM));
+            if span.x > limit.x || span.y > limit.y {
+                return false;
+            }
+            self.bounds = Some((min, max));
+        }
+        self.last_time = click.time;
+        true
+    }
+
+    fn amount(&self, desired: f64) -> f64 {
+        let Some((min, max)) = self.bounds else {
+            return desired;
+        };
+        let span = max - min;
+        let viewport = self.first.viewport;
+        desired
+            .min(AUTO_ZOOM_CONTEXT * viewport.x / span.x.max(f64::EPSILON))
+            .min(AUTO_ZOOM_CONTEXT * viewport.y / span.y.max(f64::EPSILON))
+            .max(1.0)
+    }
+}
+
+const AUTO_ZOOM_CONTEXT: f64 = 0.72;
+
+pub(crate) fn generate_zoom_segments(
+    clips: &[AutoZoomClip],
+    project: &ProjectConfiguration,
     zoom_amount: f64,
 ) -> Vec<ZoomSegment> {
-    let ordered_clicks: Vec<_> = clicks_by_clip
-        .iter()
-        .map(|clicks| {
-            let mut ordered: Vec<_> = clicks
-                .iter()
-                .filter(|click| click.time_ms.is_finite())
-                .collect();
-            ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
-            ordered
-        })
-        .collect();
+    use cap_project::XY;
+    const LEAD: f64 = 0.3;
+    const HOLD: f64 = 2.5;
+    const WIDE_GAP: f64 = 0.7;
+    let Some(timeline) = &project.timeline else {
+        return Vec::new();
+    };
+    let duration = timeline.duration();
+    if !duration.is_finite() || duration <= 1.0 || !zoom_amount.is_finite() || zoom_amount <= 1.0 {
+        return Vec::new();
+    }
+
     let holds = timeline.hold_windows();
     let offsets = crate::editor_timeline::clip_timeline_offsets(timeline);
-    let mut mapped = Vec::new();
+    let mut clicks = Vec::new();
     for (segment, offset) in timeline.segments.iter().zip(offsets) {
         if !segment.start.is_finite()
             || !segment.end.is_finite()
@@ -2748,102 +2869,98 @@ pub fn generate_zoom_segments_for_timeline(
         {
             continue;
         }
-        let Some(clicks) = ordered_clicks.get(segment.recording_clip as usize) else {
+        let Some(clip) = clips.get(segment.recording_clip as usize) else {
             continue;
         };
-        let start = clicks.partition_point(|click| click.time_ms / 1000.0 < segment.start);
-        let end = clicks.partition_point(|click| click.time_ms / 1000.0 < segment.end);
-        for click in &clicks[start..end] {
-            let source_time = click.time_ms / 1000.0;
-            let effective = offset + (source_time - segment.start) / segment.timescale;
-            let mut click = (**click).clone();
-            click.time_ms = effective_to_output(&holds, effective) * 1000.0;
-            mapped.push(click);
+        let options = clip
+            .screen_size
+            .map(|screen_size| cap_rendering::RenderOptions {
+                screen_size,
+                camera_size: clip.has_camera.then_some(screen_size),
+                preserve_screen_alpha: false,
+            });
+        let crop = options
+            .as_ref()
+            .map(|options| cap_rendering::ProjectUniforms::get_crop(options, project));
+        let start = clip
+            .positions
+            .partition_point(|(ms, _)| ms / 1000.0 < segment.start);
+        let end = clip
+            .positions
+            .partition_point(|(ms, _)| ms / 1000.0 < segment.end);
+        for &(ms, raw) in &clip.positions[start..end] {
+            let effective = offset + (ms / 1000.0 - segment.start) / segment.timescale;
+            let time = effective_to_output(&holds, effective);
+            if time < 0.0 || time >= duration - 1.0 {
+                continue;
+            }
+            let position = raw.map(|point| match (clip.screen_size, &crop) {
+                (Some(screen), Some(crop)) if crop.size.x > 0 && crop.size.y > 0 => {
+                    (point * screen.map(f64::from) - crop.position.map(f64::from))
+                        / crop.size.map(f64::from)
+                }
+                _ => point,
+            });
+            if position.is_some_and(|p| !(0.0..=1.0).contains(&p.x) || !(0.0..=1.0).contains(&p.y))
+            {
+                continue;
+            }
+            let scene = timeline
+                .scene_segments
+                .iter()
+                .enumerate()
+                .find(|(_, scene)| {
+                    time >= scene.start
+                        && time < scene.end
+                        && matches!(scene.mode, SceneMode::SplitScreen | SceneMode::Floating)
+                });
+            let viewport = options.as_ref().map_or(XY::new(1.0, 1.0), |options| {
+                cap_rendering::ProjectUniforms::auto_zoom_visible_fraction(
+                    options,
+                    project,
+                    scene.map(|(_, scene)| scene),
+                )
+            });
+            clicks.push(AutoZoomClick {
+                time,
+                position,
+                viewport,
+                clip: segment.recording_clip,
+                scene: scene.map(|(index, _)| index),
+            });
         }
     }
-    generate_zoom_segments_from_clicks(mapped, timeline.duration(), zoom_amount)
-}
-
-/// `generate_zoom_segments_from_clicks_impl`
-/// (`src-tauri/src/recording.rs:3706-3782`), the algorithm behind the Tauri
-/// command the empty zoom track's generate button invokes: every click grows
-/// into a padded interval (300ms before, 2.5s after), clicks in the last
-/// second are ignored, intervals closer than 2.5s merge, and the result is
-/// clamped inside the recording. The Tauri signature also takes the cursor
-/// *moves* and ignores them; this one does not pretend to want them.
-pub fn generate_zoom_segments_from_clicks(
-    mut clicks: Vec<CursorClickEvent>,
-    max_duration: f64,
-    zoom_amount: f64,
-) -> Vec<ZoomSegment> {
-    const MS_PER_SECOND: f64 = 1000.0;
-    const START_MIN_MS: f64 = 1.0;
-    const CLICK_PRE_PADDING_MS: f64 = 300.0;
-    const CLICK_POST_PADDING_MS: f64 = 2500.0;
-    const CLICK_END_CLAMP_PADDING_MS: f64 = 800.0;
-    const TRAILING_CLICK_IGNORE_MS: f64 = 1000.0;
-    const MERGE_GAP_MS: f64 = 2500.0;
-
-    if max_duration <= 0.0 {
-        return Vec::new();
-    }
-
-    let duration_ms = max_duration * MS_PER_SECOND;
-    let click_cutoff_ms = duration_ms - TRAILING_CLICK_IGNORE_MS;
-    let end_limit_ms = duration_ms - CLICK_END_CLAMP_PADDING_MS;
-    if click_cutoff_ms <= 0.0 || end_limit_ms <= START_MIN_MS {
-        return Vec::new();
-    }
-
-    clicks.sort_by(|a, b| {
-        a.time_ms
-            .partial_cmp(&b.time_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    clicks.sort_by(|a, b| a.time.total_cmp(&b.time));
+    let mut groups: Vec<AutoZoomGroup> = Vec::new();
     for click in clicks {
-        let time_ms = click.time_ms.floor();
-        if time_ms >= click_cutoff_ms {
-            continue;
-        }
-
-        let start = (time_ms - CLICK_PRE_PADDING_MS).max(START_MIN_MS);
-        let end = (time_ms + CLICK_POST_PADDING_MS).min(end_limit_ms);
-
-        if end > start {
-            intervals.push((start, end));
-        }
-    }
-
-    if intervals.is_empty() {
-        return Vec::new();
-    }
-
-    intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    let mut merged: Vec<(f64, f64)> = Vec::new();
-    for interval in intervals {
-        if let Some(last) = merged.last_mut()
-            && interval.0 <= last.1 + MERGE_GAP_MS
+        if let Some(group) = groups.last_mut()
+            && group.try_add(click, zoom_amount)
         {
-            last.1 = last.1.max(interval.1);
             continue;
         }
-        merged.push(interval);
+        groups.push(AutoZoomGroup::new(click));
     }
-
-    merged
-        .into_iter()
-        .map(|(start, end)| ZoomSegment {
-            start: start.round() / MS_PER_SECOND,
-            end: end.round() / MS_PER_SECOND,
-            amount: zoom_amount,
-            mode: ZoomMode::Auto,
-            glide_direction: GlideDirection::None,
-            glide_speed: 0.5,
-            instant_animation: false,
-            edge_snap_ratio: 0.25,
+    groups
+        .iter()
+        .enumerate()
+        .filter_map(|(index, group)| {
+            let round = |value: f64| (value * 1000.0).round() / 1000.0;
+            let start = round((group.first.time - LEAD).max(0.001));
+            let end = groups
+                .get(index + 1)
+                .map_or(duration - 0.8, |next| next.first.time - LEAD - WIDE_GAP)
+                .min(group.last_time + HOLD)
+                .min(duration - 0.8);
+            (end >= group.first.time + 0.1 && end > start).then(|| ZoomSegment {
+                start,
+                end: round(end),
+                amount: group.amount(zoom_amount),
+                mode: ZoomMode::Auto,
+                glide_direction: GlideDirection::None,
+                glide_speed: 0.5,
+                instant_animation: false,
+                edge_snap_ratio: 0.25,
+            })
         })
         .collect()
 }
@@ -4251,6 +4368,78 @@ mod tests {
     }
 
     // -- Auto zoom ----------------------------------------------------------
+
+    use cap_project::{CursorClickEvent, CursorEvents, XY};
+
+    fn generate_zoom_segments_for_timeline(
+        clicks: &[Vec<CursorClickEvent>],
+        timeline: &TimelineConfiguration,
+        amount: f64,
+    ) -> Vec<ZoomSegment> {
+        let clips = clicks
+            .iter()
+            .map(|clicks| AutoZoomClip {
+                positions: CursorEvents {
+                    clicks: clicks.clone(),
+                    moves: Vec::new(),
+                }
+                .pressed_positions(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        generate_zoom_segments(
+            &clips,
+            &ProjectConfiguration {
+                timeline: Some(timeline.clone()),
+                ..Default::default()
+            },
+            amount,
+        )
+    }
+
+    fn generate_zoom_segments_from_clicks(
+        clicks: Vec<CursorClickEvent>,
+        duration: f64,
+        amount: f64,
+    ) -> Vec<ZoomSegment> {
+        let project = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": duration }]
+            }
+        }));
+        generate_zoom_segments_for_timeline(&[clicks], project.timeline.as_ref().unwrap(), amount)
+    }
+
+    #[test]
+    fn auto_zoom_groups_nearby_clicks_and_leaves_a_wide_gap_before_switching_sides() {
+        let project = two_clip_config();
+        let clips = [AutoZoomClip {
+            positions: vec![
+                (1000.0, Some(XY::new(0.1, 0.4))),
+                (2000.0, Some(XY::new(0.2, 0.4))),
+                (3600.0, Some(XY::new(0.9, 0.4))),
+            ],
+            ..Default::default()
+        }];
+        let zooms = generate_zoom_segments(&clips, &project, DEFAULT_AUTO_ZOOM_AMOUNT);
+        assert_eq!(zooms.len(), 2);
+        assert_eq!(zooms[0].amount, 1.5);
+        assert_eq!((zooms[0].end, zooms[1].start), (2.6, 3.3));
+    }
+
+    #[test]
+    fn auto_zoom_reduces_magnification_if_the_pane_cannot_fit_the_action_at_default_zoom() {
+        let point = |x| AutoZoomClick {
+            time: x,
+            position: Some(XY::new(x, 0.5)),
+            viewport: XY::new(0.5, 1.0),
+            clip: 0,
+            scene: Some(0),
+        };
+        let mut group = AutoZoomGroup::new(point(0.25));
+        assert!(group.try_add(point(0.52), DEFAULT_AUTO_ZOOM_AMOUNT));
+        assert!((group.amount(DEFAULT_AUTO_ZOOM_AMOUNT) - 4.0 / 3.0).abs() < 1e-9);
+    }
 
     fn click(time_ms: f64) -> CursorClickEvent {
         CursorClickEvent {

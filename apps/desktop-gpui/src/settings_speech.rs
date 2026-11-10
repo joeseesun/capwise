@@ -1,4 +1,11 @@
-use std::io::Cursor;
+use std::{
+    io::Cursor,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use cap_utils::speech;
 use gpui::{
@@ -9,9 +16,20 @@ use gpui::{
 use crate::{
     ai_store::{self, Kind},
     i18n::tr,
-    settings_window::SettingsWindow,
+    settings_window::{MenuKind, SettingsWindow},
     store, ui,
 };
+
+const VOICES: &[(&str, &str)] = &[
+    (speech::VOICE, "Vivi 2.0"),
+    ("zh_female_xiaohe_uranus_bigtts", "小何 2.0"),
+    ("zh_male_m191_uranus_bigtts", "云舟 2.0"),
+    ("zh_male_taocheng_uranus_bigtts", "小天 2.0"),
+    ("zh_female_liuchangnvsheng_uranus_bigtts", "流畅女声 2.0"),
+    ("zh_male_shenyeboke_uranus_bigtts", "深夜播客 2.0"),
+    ("en_male_tim_uranus_bigtts", "Tim"),
+    ("en_female_dacey_uranus_bigtts", "Dacey"),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Credential {
@@ -44,6 +62,7 @@ pub(crate) struct SpeechSettings {
     editing_key: bool,
     advanced: bool,
     busy: bool,
+    preview: Option<Arc<AtomicBool>>,
     notice: Option<Result<&'static str, String>>,
 }
 
@@ -74,19 +93,72 @@ impl SpeechSettings {
             editing_key: false,
             advanced: false,
             busy: false,
+            preview: None,
             notice: None,
         }
     }
 
-    fn settings(&self, cx: &mut Context<SettingsWindow>) -> speech::Settings {
+    fn settings(&self, cx: &gpui::App) -> speech::Settings {
         speech::Settings {
             resource_id: self.model.read(cx).text().trim().to_string(),
             speaker: self.voice.read(cx).text().trim().to_string(),
         }
     }
+
+    fn voice_index(&self, cx: &gpui::App) -> Option<usize> {
+        let settings = self.settings(cx);
+        (settings.resource_id == speech::MODEL)
+            .then(|| VOICES.iter().position(|(id, _)| *id == settings.speaker))
+            .flatten()
+    }
+
+    fn stop_preview(&mut self) -> bool {
+        self.preview.take().is_some_and(|preview| {
+            preview.store(true, Ordering::Relaxed);
+            true
+        })
+    }
+}
+
+impl Drop for SpeechSettings {
+    fn drop(&mut self) {
+        self.stop_preview();
+    }
 }
 
 impl SettingsWindow {
+    pub(crate) fn speech_voice_items(&self, cx: &gpui::App) -> Vec<ui::MenuItem> {
+        let selected = self.pages.speech.voice_index(cx);
+        VOICES
+            .iter()
+            .enumerate()
+            .map(|(index, (_, name))| ui::MenuItem::new(*name, selected == Some(index)))
+            .chain([ui::MenuItem::new(
+                tr::settings::speech::custom_voice(),
+                selected.is_none(),
+            )])
+            .collect()
+    }
+
+    pub(crate) fn choose_speech_voice(&mut self, index: usize, cx: &mut Context<Self>) {
+        let state = &mut self.pages.speech;
+        if state.busy || !state.credential.ready() || state.editing_key {
+            return;
+        }
+        state.stop_preview();
+        if let Some((id, _)) = VOICES.get(index) {
+            state
+                .model
+                .update(cx, |input, cx| input.set_text(speech::MODEL, cx));
+            state.voice.update(cx, |input, cx| input.set_text(*id, cx));
+            state.advanced = false;
+        } else {
+            state.advanced = true;
+        }
+        state.notice = None;
+        cx.notify();
+    }
+
     pub(crate) fn check_speech_credential(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pages.speech.busy {
             return;
@@ -115,6 +187,10 @@ impl SettingsWindow {
         if state.busy {
             return;
         }
+        if state.stop_preview() && preview {
+            cx.notify();
+            return;
+        }
         let settings = state.settings(cx);
         if settings.validate().is_err() {
             state.notice = Some(Err(tr::settings::speech::invalid_settings().into()));
@@ -122,8 +198,19 @@ impl SettingsWindow {
             return;
         }
         let draft_key = state.key.read(cx).text().trim().to_string();
-        let preview_text = tr::settings::speech::sample();
-        state.busy = true;
+        let preview_text = match settings.speaker.as_str() {
+            voice if VOICES.iter().any(|(id, _)| *id == voice) && voice.starts_with("en_") => {
+                "Let's record a clear product demo. Start with the screen, then add your own narration."
+            }
+            voice if VOICES.iter().any(|(id, _)| *id == voice) => {
+                "今天用一分钟演示如何录制一段清晰的产品视频。先选好录制区域，再加上自己的讲解。"
+            }
+            _ => tr::settings::speech::sample(),
+        };
+        let cancel = preview.then(|| Arc::new(AtomicBool::new(false)));
+        state.preview = cancel.clone();
+        let active_preview = cancel.clone();
+        state.busy = !preview;
         state.notice = None;
         self.spawn_tokio(
             window,
@@ -149,13 +236,23 @@ impl SettingsWindow {
                             error
                         }
                     })?;
-                tokio::task::spawn_blocking(move || play_preview(audio.wav))
+                tokio::task::spawn_blocking(move || play_preview(audio.wav, cancel.as_deref()))
                     .await
                     .map_err(|error| error.to_string())??;
                 Ok((tr::settings::speech::preview_done(), source))
             },
             move |this, result, _, cx| {
                 let state = &mut this.pages.speech;
+                if let Some(active) = &active_preview {
+                    if !state
+                        .preview
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(active, current))
+                    {
+                        return;
+                    }
+                    state.preview = None;
+                }
                 state.busy = false;
                 state.notice = Some(result.map(|(message, source)| {
                     state.credential = source;
@@ -199,6 +296,7 @@ impl SettingsWindow {
                     state.busy,
                     cx,
                     |this, _, cx| {
+                        this.pages.speech.stop_preview();
                         this.pages.speech.editing_key = true;
                         this.pages.speech.notice = None;
                         cx.notify();
@@ -257,59 +355,46 @@ impl SettingsWindow {
                     )
             });
         let mut children = vec![connection.into_any_element()];
-        if ready {
+        if ready && !show_key {
             let settings = state.settings(cx);
-            let voices = [
-                (speech::VOICE, "Vivi 2.0"),
-                ("zh_female_xiaohe_uranus_bigtts", "小何 2.0"),
-                ("zh_male_m191_uranus_bigtts", "云舟 2.0"),
-                ("zh_male_taocheng_uranus_bigtts", "小天 2.0"),
-            ];
             let model = if settings.resource_id == speech::MODEL {
                 tr::settings::speech::default_model()
             } else {
                 tr::settings::speech::cloned_model()
             };
-            let voice = voices
-                .iter()
-                .find_map(|(id, name)| (*id == settings.speaker).then_some(*name))
+            let voice = state
+                .voice_index(cx)
+                .map(|index| VOICES[index].1)
                 .unwrap_or_else(tr::settings::speech::custom_voice);
+            let previewing = state.preview.is_some();
             let voice_card = self
                 .card(true)
                 .flex()
                 .flex_col()
                 .gap(px(10.))
-                .child(div().text_size(px(13.)).child(format!("{model} · {voice}")))
-                .when(settings.resource_id == speech::MODEL && !show_key, |body| {
-                    let options = voices
-                        .iter()
-                        .map(|(id, name)| ui::SegmentOption {
-                            label: Some((*name).into()),
-                            icon: None,
-                            selected: *id == settings.speaker,
-                            disabled: state.busy,
-                        })
-                        .collect();
-                    body.child(
-                        ui::SegmentedControl::settings(
-                            &self.theme,
-                            "doubao-tts-voice-presets",
-                            options,
-                        )
-                        .stretch()
-                        .on_select(cx.listener(
-                            move |this, index: &usize, _, cx| {
-                                if let Some((id, _)) = voices.get(*index) {
-                                    this.pages
-                                        .speech
-                                        .voice
-                                        .update(cx, |input, cx| input.set_text(*id, cx));
-                                    this.pages.speech.notice = None;
-                                    cx.notify();
-                                }
-                            },
+                .child(div().text_size(px(13.)).child(model))
+                .child(
+                    div().flex().items_center().gap(px(8.))
+                        .child(div().text_size(px(12.)).child(tr::settings::speech::voice_label()))
+                        .child(div().min_w_0().flex_1().child(
+                            self.select("doubao-tts-voice-presets", voice, MenuKind::SpeechVoice, cx)
+                                .stretch_label()
+                                .disabled(state.busy),
+                        ))
+                        .child(self.button(
+                            "doubao-tts-preview",
+                            (ui::ButtonVariant::Gray, Some(if previewing { "icons/square.svg" } else { "icons/play.svg" })),
+                            if previewing { tr::settings::speech::stop_preview() } else { tr::settings::speech::preview() },
+                            state.busy,
+                            cx,
+                            |this, window, cx| this.run_speech_settings(true, window, cx),
                         )),
-                    )
+                )
+                .when(state.advanced, |body| {
+                    body.child(div().text_size(px(12.)).child(tr::settings::speech::model()))
+                        .child(self.pages_input("doubao-tts-model", &state.model))
+                        .child(div().text_size(px(12.)).child(tr::settings::speech::voice()))
+                        .child(self.pages_input("doubao-tts-voice", &state.voice))
                 })
                 .child(
                     div()
@@ -320,60 +405,37 @@ impl SettingsWindow {
                             "doubao-tts-save",
                             (ui::ButtonVariant::Primary, None),
                             tr::common::save(),
-                            state.busy || show_key,
+                            state.busy,
                             cx,
                             |this, window, cx| this.run_speech_settings(false, window, cx),
-                        ))
-                        .child(self.button(
-                            "doubao-tts-preview",
-                            (ui::ButtonVariant::Gray, Some("icons/volume-2.svg")),
-                            tr::settings::speech::preview(),
-                            state.busy || show_key,
-                            cx,
-                            |this, window, cx| this.run_speech_settings(true, window, cx),
                         ))
                         .child(self.button(
                             "doubao-tts-advanced",
                             (ui::ButtonVariant::Gray, Some("icons/settings.svg")),
                             tr::settings::speech::advanced(),
-                            state.busy || show_key,
+                            state.busy,
                             cx,
                             |this, _, cx| {
                                 this.pages.speech.advanced = !this.pages.speech.advanced;
                                 cx.notify();
                             },
+                        ))
+                        .child(self.button(
+                            "doubao-tts-voices",
+                            (ui::ButtonVariant::Gray, Some("icons/arrow-up-right.svg")),
+                            tr::settings::speech::voice_list(),
+                            false,
+                            cx,
+                            |_, _, cx| {
+                                cx.open_url(
+                                    "https://docs.volcengine.com/docs/doubao-voice/tone-list-3?lang=zh",
+                                )
+                            },
                         )),
-                )
-                .when(state.advanced && !show_key, |body| {
-                    body.child(
-                        div()
-                            .text_size(px(12.))
-                            .child(tr::settings::speech::model()),
-                    )
-                    .child(self.pages_input("doubao-tts-model", &state.model))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .child(tr::settings::speech::voice()),
-                    )
-                    .child(self.pages_input("doubao-tts-voice", &state.voice))
-                    .child(div().flex().flex_wrap().gap(px(8.)).child(self.button(
-                        "doubao-tts-voices",
-                        (ui::ButtonVariant::Gray, Some("icons/arrow-up-right.svg")),
-                        tr::settings::speech::voice_list(),
-                        false,
-                        cx,
-                        |_, _, cx| {
-                            cx.open_url(
-                                "https://docs.volcengine.com/docs/doubao-voice/tone-list-3?lang=zh",
-                            )
-                        },
-                    )))
-                });
+                );
             children.push(voice_card.into_any_element());
         }
-        if let Some(message) = state
-            .busy
+        if let Some(message) = (state.busy || state.preview.is_some())
             .then(|| tr::settings::speech::working().to_string())
             .or_else(|| {
                 state.notice.as_ref().map(|notice| match notice {
@@ -437,13 +499,19 @@ fn save_settings(
     Err(tr::settings::speech::save_failed().into())
 }
 
-fn play_preview(wav: Vec<u8>) -> Result<(), String> {
+fn play_preview(wav: Vec<u8>, cancel: Option<&AtomicBool>) -> Result<(), String> {
+    let stopped = || cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed));
+    if stopped() {
+        return Ok(());
+    }
     let play = || -> anyhow::Result<()> {
         let (_stream, handle) = rodio::OutputStream::try_default()?;
         let sink = rodio::Sink::try_new(&handle)?;
         sink.set_volume(0.7);
         sink.append(rodio::Decoder::new(Cursor::new(wav))?);
-        sink.sleep_until_end();
+        while !sink.empty() && !stopped() {
+            std::thread::sleep(Duration::from_millis(25));
+        }
         Ok(())
     };
     play().map_err(|_| tr::settings::speech::play_failed().into())

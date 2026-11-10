@@ -1937,6 +1937,7 @@ pub fn open_teleprompter(cx: &mut App) {
         })
         .ok();
 
+    refresh_launcher_teleprompter(cx);
     let Some((native, alpha)) = opened else {
         return;
     };
@@ -2018,6 +2019,30 @@ pub fn play_teleprompter(cx: &mut App) {
 pub fn teleprompter_closed(cx: &mut App) {
     cx.global_mut::<AppWindows>().teleprompter.take();
     crate::hotkeys::set_teleprompter_scope(false, cx);
+    refresh_launcher_teleprompter(cx);
+}
+
+pub(crate) fn launcher_teleprompter_active(cx: &App) -> bool {
+    cx.try_global::<AppWindows>()
+        .is_some_and(|windows| windows.teleprompter.is_some())
+}
+
+fn refresh_launcher_teleprompter(cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    let _ = main.update(cx, |_, window, cx| {
+        cx.notify();
+        window.refresh();
+    });
+}
+
+pub(crate) fn apply_teleprompter_speed(speed: u32, cx: &mut App) {
+    if let Some(handle) = cx.global::<AppWindows>().teleprompter {
+        let _ = handle.update(cx, |view, window, cx| {
+            view.apply_default_speed(speed);
+            cx.notify();
+            window.refresh();
+        });
+    }
 }
 
 /// A teleprompter shortcut: 0 plays or pauses, -1 and 1 move a sentence. The

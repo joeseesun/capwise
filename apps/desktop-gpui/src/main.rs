@@ -139,6 +139,7 @@ mod settings_cover;
 mod settings_pages;
 mod settings_speech;
 mod settings_stock;
+mod settings_teleprompter;
 mod settings_window;
 #[cfg(feature = "cap-cloud")]
 mod sign_in;

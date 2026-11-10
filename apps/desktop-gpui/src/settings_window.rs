@@ -90,6 +90,7 @@ const SIDEBAR_SPACER: f32 = 44.;
 pub enum Page {
     General,
     Quality,
+    Teleprompter,
     Shortcuts,
     Cli,
     Recordings,
@@ -113,6 +114,7 @@ impl Page {
     pub const ALL: &'static [Page] = &[
         Page::General,
         Page::Quality,
+        Page::Teleprompter,
         Page::Shortcuts,
         Page::Recordings,
         Page::Transcription,
@@ -158,6 +160,7 @@ impl Page {
         match self {
             Self::General => tr::settings::nav::general(),
             Self::Quality => tr::settings::nav::quality(),
+            Self::Teleprompter => tr::main::header::teleprompter(),
             Self::Shortcuts => tr::settings::nav::shortcuts(),
             Self::Cli => tr::settings::nav::cli(),
             Self::Recordings => tr::settings::nav::recordings(),
@@ -179,6 +182,7 @@ impl Page {
         match self {
             Self::General => "general",
             Self::Quality => "quality",
+            Self::Teleprompter => "teleprompter",
             Self::Shortcuts => "hotkeys",
             Self::Cli => "cli",
             Self::Recordings => "recordings",
@@ -203,6 +207,7 @@ impl Page {
         match self {
             Self::General => "icons/settings.svg",
             Self::Experimental => "icons/settings-2.svg",
+            Self::Teleprompter => "icons/scan-text.svg",
             Self::Shortcuts => "icons/hotkeys.svg",
             Self::Cli => "icons/terminal.svg",
             Self::Quality => "icons/sliders-horizontal.svg",
@@ -233,6 +238,11 @@ impl Page {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuKind {
     Countdown,
+    SpeechVoice,
+    PrompterModel,
+    PrompterMode,
+    PrompterSpeed,
+    PrompterNarrationSpeed,
     WorkflowPreset,
     WorkflowSpeed,
     WorkflowLanguage,
@@ -780,6 +790,8 @@ pub struct SettingsWindow {
     pub(crate) page: Page,
     pub(crate) settings: GeneralSettings,
     menu: Option<OpenMenu>,
+    pub(crate) teleprompter: crate::settings_teleprompter::TeleprompterSettings,
+    _teleprompter_recording: gpui::Subscription,
     page_scroll: ScrollHandle,
     instant_quality_anchor: ScrollAnchor,
     studio_quality_anchor: ScrollAnchor,
@@ -926,6 +938,15 @@ impl SettingsWindow {
             }),
         ];
 
+        let recording = crate::session::RecordingSession::global(cx);
+        let teleprompter_recording = cx.observe(&recording, |this: &mut Self, session, cx| {
+            if session.read(cx).phase != crate::session::Phase::Idle {
+                this.teleprompter.stop_preview();
+            }
+            if this.page == Page::Teleprompter {
+                cx.notify();
+            }
+        });
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
         let keyboard_nav = ui::keyboard_nav::install(window, cx, |this: &Self, _| {
@@ -936,6 +957,8 @@ impl SettingsWindow {
             theme,
             page,
             pages,
+            teleprompter: Default::default(),
+            _teleprompter_recording: teleprompter_recording,
             project_name: settings
                 .default_project_name_template
                 .clone()
@@ -1008,6 +1031,7 @@ impl SettingsWindow {
 
     pub fn set_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         if self.page != page {
+            self.teleprompter.stop_preview();
             self.page_scroll = ScrollHandle::new();
             self.instant_quality_anchor = ScrollAnchor::for_handle(self.page_scroll.clone());
             self.studio_quality_anchor = ScrollAnchor::for_handle(self.page_scroll.clone());
@@ -1587,6 +1611,9 @@ impl SettingsWindow {
             .flatten();
         let focus = self.focus.clone();
         window.focus(&focus, cx);
+        if kind == MenuKind::PrompterModel {
+            self.prepare_prompter_models();
+        }
         let items = self.menu_items(kind, cx);
         self.menu = Some(OpenMenu {
             kind,
@@ -1634,6 +1661,11 @@ impl SettingsWindow {
     /// One row per option, check-marked when it is the value in force.
     fn menu_items(&self, kind: MenuKind, cx: &gpui::App) -> Vec<ui::MenuItem> {
         match kind {
+            MenuKind::SpeechVoice => self.speech_voice_items(cx),
+            MenuKind::PrompterModel
+            | MenuKind::PrompterMode
+            | MenuKind::PrompterSpeed
+            | MenuKind::PrompterNarrationSpeed => self.prompter_menu_items(kind),
             MenuKind::CoverProvider | MenuKind::CoverModel => self.cover_menu_items(kind, cx),
             MenuKind::WorkflowPreset => {
                 let catalog = crate::workflow_presets::WorkflowPresets::load();
@@ -1709,6 +1741,11 @@ impl SettingsWindow {
     ) {
         self.close_menu(window, cx);
         match kind {
+            MenuKind::SpeechVoice => self.choose_speech_voice(index, cx),
+            MenuKind::PrompterModel
+            | MenuKind::PrompterMode
+            | MenuKind::PrompterSpeed
+            | MenuKind::PrompterNarrationSpeed => self.choose_prompter_option(kind, index, cx),
             MenuKind::WorkflowPreset => self.update_workflow(
                 move |catalog| {
                     if let Some(preset) = catalog.presets.get(index) {
@@ -2539,6 +2576,7 @@ impl SettingsWindow {
                         Page::Recordings => self.render_recordings(cx),
                         Page::Screenshots => self.render_screenshots(cx),
                         Page::Shortcuts => self.render_shortcuts(cx),
+                        Page::Teleprompter => self.render_teleprompter_settings(cx),
                         Page::Cli => self.render_cli(cx),
                         Page::Automations => self.render_automations(cx),
                         Page::Transcription => self.render_ai_models(cx),
