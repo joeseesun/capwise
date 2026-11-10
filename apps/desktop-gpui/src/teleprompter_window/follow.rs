@@ -395,13 +395,19 @@ impl TeleprompterWindow {
     pub(super) fn reading_offset(&self, cx: &Context<Self>) -> Option<usize> {
         let body = self.follow.body_bounds.get()?;
         let text = self.follow.text_bounds.get()?;
-        let y = body.origin.y + body.size.height / 2. - text.origin.y;
+        let y = px(self.cue_y(body)) - text.origin.y;
         self.script_input.read(cx).byte_offset_for_visual_y(y)
     }
 
     pub(super) fn start_follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.stop_follow();
         self.stop_playback();
+        // Follow resumes from wherever the text is now, which a trackpad may
+        // have moved since.
+        self.glide = None;
+        self.position = (-f32::from(self.scroll.offset().y)).clamp(0., self.maximum_scroll());
+        self.glide_target = self.position;
+        self.spoken = self.manual_anchor;
         #[cfg(not(target_os = "macos"))]
         let source = {
             let endpoint = ai_store::endpoint(Kind::Asr, "doubao");
@@ -538,33 +544,22 @@ impl TeleprompterWindow {
                 offset = Some(anchor.read_offset);
             }
         }
-        let Some(row) = offset.and_then(|offset| {
-            self.script_input
-                .read(cx)
-                .visual_row_bounds_for_offset(offset)
-        }) else {
+        let Some(offset) = offset else {
             return;
         };
-        let (Some(body), Some(text)) =
-            (self.follow.body_bounds.get(), self.follow.text_bounds.get())
-        else {
+        let Some(position) = self.reading_position_for(offset, cx) else {
             return;
         };
-        let Some(position) = reading_scroll_position(
-            f32::from(self.scroll.offset().y),
-            f32::from(text.origin.y),
-            f32::from(row.start)..f32::from(row.end),
-            f32::from(body.origin.y + body.size.height / 2.),
-            self.maximum_scroll(),
-        ) else {
-            return;
-        };
+        // Apple's recognizer revises its own words, so it never moves back.
         #[cfg(target_os = "macos")]
-        let position = self.position.max(position);
+        let (position, offset) = (
+            self.glide_target.max(position),
+            self.spoken.map_or(offset, |spoken| spoken.max(offset)),
+        );
         self.manual_anchor = None;
+        self.spoken = Some(offset);
         self.follow.phase = FollowPhase::Listening;
-        self.position = position;
-        self.apply_scroll();
+        self.glide_to(position, window, cx);
         window.refresh();
         cx.notify();
     }
@@ -584,10 +579,11 @@ impl TeleprompterWindow {
         let Some(target) = follower.adjacent_sentence_offset(offset, direction) else {
             return;
         };
-        if self.bring_to_reading_line(target, cx) {
+        self.pause_follow();
+        self.stop_playback();
+        if self.glide_to_offset(target, window, cx) {
             self.manual_anchor = Some(target);
-            self.pause_follow();
-            self.stop_playback();
+            self.spoken = Some(target);
             window.refresh();
             cx.notify();
         }

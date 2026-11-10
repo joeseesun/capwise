@@ -195,7 +195,12 @@ impl EditorWindow {
                                             .text_size(px(13.))
                                             .line_height(px(20.))
                                             .text_color(Hsla::from(theme.editor.text_1))
-                                            .child(segment.text.clone())
+                                            .child(
+                                                self.render_caption_review_text(&segment.id)
+                                                    .unwrap_or_else(|| {
+                                                        segment.text.clone().into_any_element()
+                                                    }),
+                                            )
                                     })
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         // A second click on the open line
@@ -215,6 +220,11 @@ impl EditorWindow {
                                         this.focus_root(window, cx);
                                         cx.notify();
                                     })),
+                            )
+                            .children(
+                                active
+                                    .then(|| self.render_caption_review_notes(&segment.id, cx))
+                                    .flatten(),
                             )
                             .children(active.then(|| {
                                 div().px(px(8.)).child(self.render_caption_panel(index, cx))

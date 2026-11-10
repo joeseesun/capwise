@@ -34,9 +34,8 @@ use std::{
 use gpui::{
     AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
     IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollHandle,
-    SharedString,
-    StatefulInteractiveElement, Styled, Window, div, linear_color_stop, linear_gradient, point,
-    prelude::FluentBuilder, px, svg,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, linear_color_stop,
+    linear_gradient, point, prelude::FluentBuilder, px, svg,
 };
 
 use crate::i18n::tr;
@@ -50,10 +49,11 @@ use crate::{
 
 /// `getTeleprompterWindowOptions`: `width: 560, height: 320`, `minWidth: 420`,
 /// `minHeight: 220`, `resizable: true`, `center: true`.
-pub const TELEPROMPTER_WIDTH: f32 = 560.;
-pub const TELEPROMPTER_HEIGHT: f32 = 320.;
+pub const TELEPROMPTER_WIDTH: f32 = 600.;
+pub const TELEPROMPTER_HEIGHT: f32 = 360.;
 pub const TELEPROMPTER_MIN_WIDTH: f32 = 420.;
-pub const TELEPROMPTER_MIN_HEIGHT: f32 = 220.;
+/// Low enough for the two-line strip under the camera.
+pub const TELEPROMPTER_MIN_HEIGHT: f32 = 96.;
 
 /// `trafficLightPosition: new LogicalPosition(14, 14)`, which
 /// `CapWindowId::Teleprompter::traffic_lights_position` repeats on the Rust
@@ -97,9 +97,20 @@ const CAMERA_SNAP_DELAY: Duration = Duration::from_millis(350);
 const BAR_WASH: f32 = 110.;
 
 /// `clamp(current.fontSize + delta, 22, 52)` with `delta = ±2`.
-const FONT_SIZE_MIN: f32 = 22.;
-const FONT_SIZE_MAX: f32 = 52.;
-const FONT_SIZE_STEP: f32 = 2.;
+/// The text size follows the window width (see [`text_size_for`]) inside
+/// these bounds.
+const TEXT_SIZE_MIN: f32 = 18.;
+const TEXT_SIZE_MAX: f32 = 64.;
+/// A− / A+ and ⌘− / ⌘+ change the line length by one character.
+const CHARS_STEP: f32 = 1.;
+/// Follow corrections closer than this many rows glide; farther ones jump,
+/// because a long glide reads as the text drifting away.
+const GLIDE_ROWS: f32 = 3.;
+/// The glide's time constant: about 90% of the way in a quarter second.
+const GLIDE_TAU: f32 = 0.11;
+/// The compact strip's height, in rows of text, plus its padding.
+const COMPACT_ROWS: f32 = 2.;
+const COMPACT_PADDING: f32 = 18.;
 
 /// `setTimeout(..., 250)` in the persistence effect.
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -183,6 +194,38 @@ pub fn playback_resume_position(offset_y: f32, maximum_scroll: f32) -> f32 {
 pub fn remaining_seconds(word_count: usize, words_per_minute: u32, read: f32) -> u32 {
     let left = word_count as f32 * (1. - read.clamp(0., 1.));
     (left / words_per_minute.max(1) as f32 * 60.).round() as u32
+}
+
+/// The text size that fits `chars_per_line` CJK characters (one em each) on
+/// a line of a window `width` wide.
+pub fn text_size_for(width: f32, chars_per_line: f32) -> f32 {
+    let usable = width - 2. * store::TELEPROMPTER_TEXT_PADDING;
+    if !usable.is_finite() || !chars_per_line.is_finite() || chars_per_line <= 0. {
+        return TEXT_SIZE_MIN;
+    }
+    (usable / chars_per_line)
+        .floor()
+        .clamp(TEXT_SIZE_MIN, TEXT_SIZE_MAX)
+}
+
+/// Where the reading line's centre sits, from the top of a script area
+/// `height` tall: at `fraction` of it, but never so close to an edge that the
+/// row being read is cut off.
+pub fn reading_cue(height: f32, row: f32, fraction: f32) -> f32 {
+    let low = row * 0.5 + 4.;
+    let high = (height - row * 0.5).max(low);
+    (height * fraction).clamp(low, high)
+}
+
+/// One frame of a glide towards `target`: exponential, so it slows into
+/// place, and snaps once it is within half a pixel.
+pub fn glide_step(position: f32, target: f32, elapsed: f32) -> f32 {
+    let next = position + (target - position) * (1. - (-elapsed.max(0.) / GLIDE_TAU).exp());
+    if (target - next).abs() < 0.5 {
+        target
+    } else {
+        next
+    }
 }
 
 /// `m:ss`.
@@ -275,6 +318,21 @@ pub struct TeleprompterWindow {
     /// of a double click edits that line rather than whatever moved under it.
     clicked_offset: Option<usize>,
     manual_anchor: Option<usize>,
+    /// Voice follow: how far the reader has got, as a byte offset. Text
+    /// before it dims, so the next word to say is the first bright one.
+    spoken: Option<usize>,
+    /// A short scroll easing into place; `glide_target` is where it ends.
+    glide: Option<gpui::Task<()>>,
+    glide_target: f32,
+    /// The reading line is being dragged; the offset is the line that was on
+    /// it, which stays there while it moves.
+    line_drag: Option<Option<usize>>,
+    /// The window is resizing itself (the compact strip), so the resize does
+    /// not count as the user moving the text.
+    self_resizing: bool,
+    resize_anchor: Option<usize>,
+    /// The window's height before it became the compact strip.
+    expanded_height: Option<f32>,
     last_phase: Phase,
     snap_task: Option<gpui::Task<()>>,
     playback_state: PlaybackState,
@@ -428,7 +486,22 @@ impl TeleprompterWindow {
                 previous[2] != f32::from(bounds.size.width)
                     || previous[3] != f32::from(bounds.size.height)
             }) {
-                this.pause_follow();
+                // The text size follows the width, so the rows reflow: keep
+                // the line being read on the reading line.
+                let anchor = this.resize_anchor.take().or_else(|| {
+                    this.manual_anchor
+                        .or(this.spoken)
+                        .or_else(|| this.reading_offset(cx))
+                });
+                if !std::mem::take(&mut this.self_resizing) {
+                    this.pause_follow();
+                }
+                if let Some(offset) = anchor.filter(|_| !this.editing) {
+                    cx.on_next_frame(window, move |this, _, cx| {
+                        this.bring_to_reading_line(offset, cx);
+                        cx.notify();
+                    });
+                }
             }
             let moved = this.state.window_bounds.is_some_and(|previous| {
                 previous[2] == f32::from(bounds.size.width)
@@ -471,6 +544,13 @@ impl TeleprompterWindow {
             toast_task: None,
             clicked_offset: None,
             manual_anchor: None,
+            spoken: None,
+            glide: None,
+            glide_target: 0.,
+            line_drag: None,
+            self_resizing: false,
+            resize_anchor: None,
+            expanded_height: None,
             last_phase,
             snap_task: None,
             playback_state,
@@ -551,6 +631,7 @@ impl TeleprompterWindow {
         cx: &mut Context<Self>,
     ) {
         self.pause_follow();
+        self.spoken = None;
         edit(&mut self.state.script);
         if !self.has_script() {
             self.stop_playback();
@@ -569,18 +650,21 @@ impl TeleprompterWindow {
         self.edit_script(move |script| *script = next, window, cx);
     }
 
-    /// `changeFontSize(delta)`, clamped 22-52. The line being read stays on
-    /// the reading line.
-    fn change_font_size(&mut self, delta: f32, window: &mut Window, cx: &mut Context<Self>) {
-        let next = clamp(self.state.font_size + delta, FONT_SIZE_MIN, FONT_SIZE_MAX);
-        if next == self.state.font_size {
+    /// A+ is fewer, larger characters per line; A− more, smaller ones. The
+    /// size itself follows the window width, so the lines keep their length
+    /// when the window is resized. The line being read stays on the reading
+    /// line.
+    fn change_line_length(&mut self, delta: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let (minimum, maximum, _) = store::TELEPROMPTER_CHARS_PER_LINE;
+        let next = clamp(self.state.chars_per_line + delta, minimum, maximum);
+        if next == self.state.chars_per_line {
             return;
         }
         let reading = self.reading_offset(cx);
-        self.state.font_size = next;
-        self.touch(TeleprompterState::FONT_SIZE, window, cx);
+        self.state.chars_per_line = next;
+        self.touch(TeleprompterState::CHARS_PER_LINE, window, cx);
         self.show_toast(
-            tr::dialog::teleprompter::assist::font_size(next as i32).into(),
+            tr::dialog::teleprompter::assist::line_length(next as usize).into(),
             window,
             cx,
         );
@@ -662,11 +746,14 @@ impl TeleprompterWindow {
 
     /// Edit, with the caret at `at` when a line was double-clicked.
     fn enter_editing(&mut self, at: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_compact(false, window, cx);
         self.stop_follow();
         self.stop_playback();
         self.play_menu_open = false;
         self.editing = true;
         self.manual_anchor = None;
+        self.spoken = None;
+        self.glide = None;
         let at = at.or_else(|| self.reading_offset(cx));
         self.script_input.update(cx, |input, cx| {
             input.set_disabled(false, cx);
@@ -681,30 +768,213 @@ impl TeleprompterWindow {
 
     /// Scroll so the row holding `offset` sits on the reading line.
     fn bring_to_reading_line(&mut self, offset: usize, cx: &mut Context<Self>) -> bool {
-        let Some(row) = self
+        let Some(position) = self.reading_position_for(offset, cx) else {
+            return false;
+        };
+        self.glide = None;
+        self.position = position;
+        self.glide_target = position;
+        self.apply_scroll();
+        true
+    }
+
+    /// The scroll position that puts the row holding `offset` on the reading
+    /// line.
+    fn reading_position_for(&self, offset: usize, cx: &Context<Self>) -> Option<f32> {
+        let row = self
             .script_input
             .read(cx)
-            .visual_row_bounds_for_offset(offset)
-        else {
-            return false;
-        };
-        let (Some(body), Some(text)) =
-            (self.follow.body_bounds.get(), self.follow.text_bounds.get())
-        else {
-            return false;
-        };
-        let Some(position) = follow::reading_scroll_position(
+            .visual_row_bounds_for_offset(offset)?;
+        let body = self.follow.body_bounds.get()?;
+        let text = self.follow.text_bounds.get()?;
+        follow::reading_scroll_position(
             f32::from(self.scroll.offset().y),
             f32::from(text.origin.y),
             f32::from(row.start)..f32::from(row.end),
-            f32::from(body.origin.y + body.size.height / 2.),
+            self.cue_y(body),
             self.maximum_scroll(),
-        ) else {
+        )
+    }
+
+    /// The text size for a window (or script area) `width` wide.
+    fn text_size(&self, width: f32) -> f32 {
+        text_size_for(width, self.state.chars_per_line)
+    }
+
+    fn row_height(&self, width: f32) -> f32 {
+        (self.text_size(width) * self.state.line_height).round()
+    }
+
+    /// The reading line, in window coordinates.
+    pub(super) fn cue_y(&self, body: Bounds<Pixels>) -> f32 {
+        let height = f32::from(body.size.height);
+        f32::from(body.origin.y)
+            + reading_cue(
+                height,
+                self.row_height(f32::from(body.size.width)),
+                self.state.reading_line,
+            )
+    }
+
+    /// Ease to `offset`'s row when it is close, jump when it is far -- and
+    /// never ease under steady scrolling, which moves the text itself.
+    pub(super) fn glide_to_offset(
+        &mut self,
+        offset: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(target) = self.reading_position_for(offset, cx) else {
             return false;
         };
-        self.position = position;
-        self.apply_scroll();
+        self.glide_to(target, window, cx);
         true
+    }
+
+    pub(super) fn glide_to(&mut self, target: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let width = self
+            .follow
+            .body_bounds
+            .get()
+            .map_or(TELEPROMPTER_WIDTH, |body| f32::from(body.size.width));
+        let current = (-f32::from(self.scroll.offset().y)).clamp(0., self.maximum_scroll());
+        self.glide_target = target;
+        if self.playback_state.requested
+            || (target - current).abs() > self.row_height(width) * GLIDE_ROWS
+        {
+            self.glide = None;
+            self.position = target;
+            self.apply_scroll();
+            return;
+        }
+        self.position = current;
+        if self.glide.is_some() {
+            return;
+        }
+        self.glide = Some(cx.spawn_in(window, async move |this, cx| {
+            let mut last = Instant::now();
+            loop {
+                cx.background_executor().timer(PLAYBACK_TICK).await;
+                let now = Instant::now();
+                let elapsed = now
+                    .saturating_duration_since(last)
+                    .as_secs_f32()
+                    .min(MAX_TICK_SECONDS);
+                last = now;
+                let moving = this
+                    .update_in(cx, |this, window, cx| {
+                        this.position = glide_step(this.position, this.glide_target, elapsed);
+                        this.apply_scroll();
+                        let moving = this.position != this.glide_target;
+                        if !moving {
+                            this.glide = None;
+                        }
+                        cx.notify();
+                        window.refresh();
+                        moving
+                    })
+                    .unwrap_or(false);
+                if !moving {
+                    return;
+                }
+            }
+        }));
+    }
+
+    /// The header row's height: none in the compact strip, where every point
+    /// goes to the text.
+    fn header_height(&self) -> f32 {
+        if self.compact_now() {
+            0.
+        } else {
+            HEADER_HEIGHT
+        }
+    }
+
+    /// The strip only while reading; writing always gets the full window.
+    fn compact_now(&self) -> bool {
+        self.state.compact && !self.editing && !self.ai_open
+    }
+
+    fn start_line_drag(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.line_drag = Some(self.manual_anchor.or_else(|| self.reading_offset(cx)));
+        self.glide = None;
+        cx.notify();
+    }
+
+    fn drag_line_to(&mut self, y: Pixels, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(anchor) = self.line_drag else {
+            return;
+        };
+        let Some(body) = self.follow.body_bounds.get() else {
+            return;
+        };
+        let height = f32::from(body.size.height);
+        if height <= 0. {
+            return;
+        }
+        let (minimum, maximum, _) = store::TELEPROMPTER_READING_LINE;
+        let fraction = ((f32::from(y - body.origin.y)) / height).clamp(minimum, maximum);
+        if (fraction - self.state.reading_line).abs() < 0.002 {
+            return;
+        }
+        self.state.reading_line = fraction;
+        if let Some(offset) = anchor {
+            cx.on_next_frame(window, move |this, _, cx| {
+                this.bring_to_reading_line(offset, cx);
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
+    fn end_line_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.line_drag.take().is_some() {
+            self.touch(TeleprompterState::READING_LINE, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// The compact strip: two rows of text right under the camera, no header,
+    /// controls only under the pointer. Toggling back restores the window's
+    /// height and keeps the line being read on the reading line.
+    pub fn toggle_compact(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_compact(!self.state.compact, window, cx);
+    }
+
+    fn set_compact(&mut self, compact: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.compact == compact {
+            return;
+        }
+        let anchor = self
+            .manual_anchor
+            .or(self.spoken)
+            .or_else(|| self.reading_offset(cx));
+        let bounds = window.bounds();
+        let width = f32::from(bounds.size.width);
+        let height = if compact {
+            self.expanded_height = Some(f32::from(bounds.size.height));
+            (self.row_height(width) * COMPACT_ROWS + COMPACT_PADDING * 2.).round()
+        } else {
+            self.expanded_height
+                .take()
+                .filter(|height| *height > TELEPROMPTER_MIN_HEIGHT * 1.5)
+                .unwrap_or(TELEPROMPTER_HEIGHT)
+        };
+        self.state.compact = compact;
+        self.touch(TeleprompterState::COMPACT, window, cx);
+        self.play_menu_open = false;
+        self.self_resizing = true;
+        crate::app_windows::resize_teleprompter(
+            window,
+            gpui::size(px(width), px(height)),
+            compact,
+            cx,
+        );
+        // The resize lands through the window-bounds observer, which keeps
+        // this line on the reading line once the rows reflow.
+        self.resize_anchor = anchor;
+        cx.notify();
     }
 
     /// A click on the script while reading: one click reads from that line,
@@ -737,7 +1007,10 @@ impl TeleprompterWindow {
         self.clicked_offset = Some(offset);
         self.manual_anchor = Some(offset);
         self.pause_follow();
-        self.bring_to_reading_line(offset, cx);
+        self.spoken = self.voice_mode.then_some(offset);
+        if !self.glide_to_offset(offset, window, cx) {
+            self.bring_to_reading_line(offset, cx);
+        }
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -755,6 +1028,21 @@ impl TeleprompterWindow {
                 cx,
             ),
             _ => {}
+        }
+        cx.notify();
+        window.refresh();
+    }
+
+    /// A global shortcut while another app has the focus: 0 plays or
+    /// pauses, -1 and 1 move a sentence. Nothing while writing.
+    pub(crate) fn hotkey(&mut self, direction: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing || self.ai_open || !self.has_script() {
+            return;
+        }
+        if direction == 0 {
+            self.play_pressed(window, cx);
+        } else {
+            self.seek_sentence(direction, window, cx);
         }
         cx.notify();
         window.refresh();
@@ -783,6 +1071,7 @@ impl TeleprompterWindow {
             self.stop_follow();
             self.stop_playback();
             self.voice_mode = voice;
+            self.spoken = None;
             if !voice {
                 self.manual_anchor = None;
             }
@@ -794,6 +1083,8 @@ impl TeleprompterWindow {
     /// Back to the top, ready to read again.
     fn restart(&mut self, cx: &mut Context<Self>) {
         self.manual_anchor = None;
+        self.spoken = None;
+        self.glide = None;
         self.pause_follow();
         self.stop_playback();
         self.position = 0.;
@@ -1015,7 +1306,9 @@ impl Render for TeleprompterWindow {
             .locale_font()
             .font_weight(FontWeight::MEDIUM)
             .text_color(Hsla::from(theme.gray_12))
-            .child(self.render_header(window))
+            .when(!self.compact_now(), |this| {
+                this.child(self.render_header(window))
+            })
             .when(!reading, |this| this.child(self.render_tools(cx)))
             .children(self.render_save_error(cx))
             .child(if self.ai_open {
@@ -1032,6 +1325,7 @@ impl Render for TeleprompterWindow {
                     .children(self.render_play_menu(cx))
             })
             .children(self.render_slider_drag_layer(cx))
+            .children(self.render_line_drag_layer(cx))
     }
 }
 
@@ -1059,14 +1353,15 @@ impl TeleprompterWindow {
         match key {
             "space" if plain => self.play_pressed(window, cx),
             "v" if plain => self.set_voice_mode(!self.voice_mode, window, cx),
-            "left" if plain && self.voice_mode => self.seek_sentence(-1, window, cx),
-            "right" if plain && self.voice_mode => self.seek_sentence(1, window, cx),
+            "left" if plain => self.seek_sentence(-1, window, cx),
+            "right" if plain => self.seek_sentence(1, window, cx),
             "up" if plain => self.change_speed(WPM_KEY_STEP, window, cx),
             "down" if plain => self.change_speed(-WPM_KEY_STEP, window, cx),
             "home" if plain => self.restart(cx),
             "enter" if plain => self.enter_editing(None, window, cx),
-            "=" | "+" if modifiers.platform => self.change_font_size(FONT_SIZE_STEP, window, cx),
-            "-" if modifiers.platform => self.change_font_size(-FONT_SIZE_STEP, window, cx),
+            "=" | "+" if modifiers.platform => self.change_line_length(-CHARS_STEP, window, cx),
+            "-" if modifiers.platform => self.change_line_length(CHARS_STEP, window, cx),
+            "c" if plain => self.toggle_compact(window, cx),
             _ => return,
         }
         cx.stop_propagation();
@@ -1142,20 +1437,29 @@ impl TeleprompterWindow {
         let state = &self.state;
         let reading = !self.editing;
 
-        let viewport = f32::from(window.viewport_size().height);
+        let viewport = window.viewport_size();
+        let width = f32::from(viewport.width);
         let body_height = self
             .follow
             .body_bounds
             .get()
             .map(|bounds| f32::from(bounds.size.height))
-            .unwrap_or(viewport - HEADER_HEIGHT - FOOTER_HEIGHT);
-        let row = state.font_size * state.line_height;
-        let spacer = (body_height / 2. - row * 0.5).max(0.);
+            .unwrap_or(f32::from(viewport.height) - self.header_height() - FOOTER_HEIGHT);
+        let size = self.text_size(width);
+        let row = self.row_height(width);
+        // The first and last rows can both reach the reading line.
+        let cue = if reading {
+            reading_cue(body_height, row, state.reading_line)
+        } else {
+            body_height / 2.
+        };
+        let top_spacer = (cue - row * 0.5).max(0.);
+        let bottom_spacer = (body_height - cue - row * 0.5).max(0.);
         let body_bounds = self.follow.body_bounds.clone();
         let text_bounds = self.follow.text_bounds.clone();
         let view = cx.entity().downgrade();
         let wash = |alpha: f32| Theme::with_alpha(theme.gray_1, alpha);
-        let fade = (body_height / 2. - row * 0.5).max(0.);
+        let spoken = self.spoken.filter(|_| reading && self.voice_mode);
 
         div()
             .relative()
@@ -1165,11 +1469,11 @@ impl TeleprompterWindow {
             .child(
                 gpui::canvas(
                     move |bounds, _, cx| {
-                        let height_changed = body_bounds
+                        let changed = body_bounds
                             .get()
-                            .is_none_or(|previous| previous.size.height != bounds.size.height);
+                            .is_none_or(|previous| previous.size != bounds.size);
                         body_bounds.set(Some(bounds));
-                        if height_changed {
+                        if changed {
                             let view = view.clone();
                             cx.defer(move |cx| {
                                 let _ = view.update(cx, |_, cx| cx.notify());
@@ -1192,14 +1496,15 @@ impl TeleprompterWindow {
                     // would pull it back, so that pauses.
                     .on_scroll_wheel(cx.listener(|this, _, _, cx| {
                         this.manual_anchor = None;
+                        this.glide = None;
                         this.pause_follow();
                         cx.notify();
                     }))
-                    .child(div().h(px(spacer)).flex_shrink_0())
+                    .child(div().h(px(top_spacer)).flex_shrink_0())
                     .child(
                         div()
                             .w_full()
-                            .px(px(28.))
+                            .px(px(store::TELEPROMPTER_TEXT_PADDING))
                             .relative()
                             .when(reading, |this| {
                                 this.cursor(gpui::CursorStyle::PointingHand).on_mouse_down(
@@ -1218,24 +1523,29 @@ impl TeleprompterWindow {
                                 .size_full(),
                             )
                             .child(
+                                // Left-aligned: every line starts in the same
+                                // place, so the eye never hunts for the next.
                                 ui::TextInput::bare(&theme, "script", &self.script_input)
-                                    .align(gpui::TextAlign::Center)
+                                    .align(gpui::TextAlign::Left)
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_size(px(state.font_size))
+                                    .text_size(px(size))
                                     .line_height(px(row))
                                     .text_color(Hsla::from(theme.gray_12))
+                                    .read_prefix(spoken, Theme::with_alpha(theme.gray_12, 0.32))
                                     .placeholder_color(Theme::with_alpha(theme.gray_8, 0.7))
                                     .selection_color(Theme::with_alpha(theme.gray_12, 0.25)),
                             ),
                     )
-                    .child(div().h(px(spacer)).flex_shrink_0()),
+                    .child(div().h(px(bottom_spacer)).flex_shrink_0()),
             )
             .when(reading, |this| {
-                this.child(div().absolute().top_0().left_0().right_0().h(px(fade)).bg(
+                let above = (cue - row * 0.5).max(0.);
+                let below = (body_height - cue - row * 0.5).max(0.);
+                this.child(div().absolute().top_0().left_0().right_0().h(px(above)).bg(
                     linear_gradient(
                         180.,
-                        linear_color_stop(wash(0.92), 0.),
-                        linear_color_stop(wash(0.5), 1.),
+                        linear_color_stop(wash(0.94), 0.),
+                        linear_color_stop(wash(0.55), 1.),
                     ),
                 ))
                 .child(
@@ -1244,29 +1554,80 @@ impl TeleprompterWindow {
                         .bottom_0()
                         .left_0()
                         .right_0()
-                        .h(px(fade))
+                        .h(px(below))
                         .bg(linear_gradient(
                             0.,
-                            linear_color_stop(wash(0.92), 0.),
-                            linear_color_stop(wash(0.5), 1.),
+                            linear_color_stop(wash(0.94), 0.),
+                            linear_color_stop(wash(0.35), 1.),
                         )),
                 )
                 // The control bar floats over the last rows; wash them out
                 // fully there so text doesn't show on both sides of it.
-                .child(
-                    div()
-                        .absolute()
-                        .bottom_0()
-                        .left_0()
-                        .right_0()
-                        .h(px(BAR_WASH.min(fade)))
-                        .bg(linear_gradient(
-                            0.,
-                            linear_color_stop(wash(1.), 0.),
-                            linear_color_stop(wash(0.), 1.),
-                        )),
-                )
+                .when(!self.state.compact, |this| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(BAR_WASH.min(below)))
+                            .bg(linear_gradient(
+                                0.,
+                                linear_color_stop(wash(1.), 0.),
+                                linear_color_stop(wash(0.), 1.),
+                            )),
+                    )
+                })
+                .child(self.render_reading_marks(cue, row, cx))
             })
+    }
+
+    /// Two small marks at the ends of the reading line. Dragging either moves
+    /// the line; the row being read moves with it.
+    fn render_reading_marks(&self, cue: f32, row: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let active = self.line_drag.is_some();
+        let alpha = if active {
+            0.75
+        } else if self.bar_awake || self.over_bar {
+            0.4
+        } else {
+            0.18
+        };
+        let hit = row.clamp(24., 40.);
+        let mark = |id: &'static str, icon: &'static str| {
+            div()
+                .id(id)
+                .absolute()
+                .top(px(cue - hit / 2.))
+                .w(px(24.))
+                .h(px(hit))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor(gpui::CursorStyle::ResizeUpDown)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                        this.start_line_drag(window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(10.))
+                        .text_color(Theme::with_alpha(theme.gray_12, alpha)),
+                )
+        };
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .child(mark("reading-mark-left", "icons/reading-mark-right.svg").left(px(4.)))
+            .child(mark("reading-mark-right", "icons/reading-mark-left.svg").right(px(4.)))
     }
 
     /// Writing: how long the script runs, how to read it, and Done.
@@ -1343,8 +1704,7 @@ impl TeleprompterWindow {
     fn render_reading_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         use tr::dialog::teleprompter::assist as copy;
         let running = self.running();
-        if !self.voice_mode
-            && running
+        if (self.compact_now() || (!self.voice_mode && running))
             && !self.bar_awake
             && !self.over_bar
             && !self.play_menu_open
@@ -1463,7 +1823,7 @@ impl TeleprompterWindow {
                 "icons/minus.svg",
                 false,
                 cx.listener(|this, _, window, cx| {
-                    this.change_font_size(-FONT_SIZE_STEP, window, cx);
+                    this.change_line_length(CHARS_STEP, window, cx);
                 }),
             ))
             .child(
@@ -1478,9 +1838,26 @@ impl TeleprompterWindow {
                 "icons/plus.svg",
                 false,
                 cx.listener(|this, _, window, cx| {
-                    this.change_font_size(FONT_SIZE_STEP, window, cx);
+                    this.change_line_length(-CHARS_STEP, window, cx);
                 }),
             ))
+            .child(
+                self.tool_button(
+                    "prompter-compact",
+                    if self.state.compact {
+                        "icons/maximize-2.svg"
+                    } else {
+                        "icons/minimize-2.svg"
+                    },
+                    false,
+                    cx.listener(|this, _, window, cx| this.toggle_compact(window, cx)),
+                )
+                .accessible_name(if self.state.compact {
+                    copy::expand()
+                } else {
+                    copy::compact()
+                }),
+            )
             .child(divider())
             .child(
                 self.button("prompter-edit", copy::edit())
@@ -1532,12 +1909,16 @@ impl TeleprompterWindow {
                 .rounded(px(10.))
                 .hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
                 .child(
-                    div().w(px(14.)).pt(px(1.)).flex_shrink_0().children(on.then(|| {
-                        svg()
-                            .path("icons/check.svg")
-                            .size(px(14.))
-                            .text_color(Hsla::from(theme.gray_12))
-                    })),
+                    div()
+                        .w(px(14.))
+                        .pt(px(1.))
+                        .flex_shrink_0()
+                        .children(on.then(|| {
+                            svg()
+                                .path("icons/check.svg")
+                                .size(px(14.))
+                                .text_color(Hsla::from(theme.gray_12))
+                        })),
                 )
                 .child(
                     div()
@@ -1597,7 +1978,7 @@ impl TeleprompterWindow {
         Some(
             div()
                 .absolute()
-                .top(px(HEADER_HEIGHT + 6.))
+                .top(px(self.header_height() + 6.))
                 .left_0()
                 .right_0()
                 .flex()
@@ -1642,6 +2023,22 @@ impl TeleprompterWindow {
                     this.set_slider_from(event.position, window, cx);
                 }),
             )
+    }
+
+    /// While the reading line is held the whole window takes the mouse.
+    fn render_line_drag_layer(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        self.line_drag?;
+        Some(
+            ui::Slider::drag_layer(
+                "reading-line-drag",
+                cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                    this.drag_line_to(event.position.y, window, cx);
+                }),
+                cx.listener(|this, _, window, cx| this.end_line_drag(window, cx)),
+            )
+            .cursor(gpui::CursorStyle::ResizeUpDown)
+            .into_any_element(),
+        )
     }
 
     /// While the range is held the whole window takes the mouse, so a drag
@@ -1992,6 +2389,47 @@ impl TeleprompterWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_size_keeps_the_line_length_as_the_window_resizes() {
+        // 600 wide, 14 a line: (600 - 64) / 14 = 38.3, floored.
+        assert_eq!(text_size_for(600., 14.), 38.);
+        // Twice as many characters, half the size -- until the floor.
+        assert_eq!(text_size_for(600., 28.), 19.);
+        assert_eq!(text_size_for(420., 28.), TEXT_SIZE_MIN);
+        // A very wide window stops growing the text.
+        assert_eq!(text_size_for(3000., 8.), TEXT_SIZE_MAX);
+        assert_eq!(text_size_for(f32::NAN, 14.), TEXT_SIZE_MIN);
+        assert_eq!(text_size_for(600., 0.), TEXT_SIZE_MIN);
+    }
+
+    #[test]
+    fn the_reading_line_stays_inside_the_script_area() {
+        assert_eq!(reading_cue(300., 60., 0.3), 90.);
+        // Too high: the row being read would be cut by the top edge.
+        assert_eq!(reading_cue(300., 60., 0.0), 34.);
+        // Too low: by the bottom edge.
+        assert_eq!(reading_cue(300., 60., 1.0), 270.);
+        // A strip barely taller than one row still shows that row whole.
+        assert_eq!(reading_cue(50., 60., 0.3), 34.);
+    }
+
+    #[test]
+    fn a_glide_eases_in_and_lands_exactly() {
+        let mut position = 0.;
+        let mut steps = 0;
+        while position != 100. && steps < 200 {
+            let next = glide_step(position, 100., 0.016);
+            assert!(next > position && next <= 100.);
+            position = next;
+            steps += 1;
+        }
+        assert_eq!(position, 100.);
+        // About a quarter second at 60fps, not an instant jump or a crawl.
+        assert!((10..=60).contains(&steps), "{steps}");
+        assert_eq!(glide_step(40., 40., 0.016), 40.);
+        assert_eq!(glide_step(100., 0., 0.016) < 100., true);
+    }
 
     #[test]
     fn failed_store_read_keeps_script_and_backup_pending_until_retry() {

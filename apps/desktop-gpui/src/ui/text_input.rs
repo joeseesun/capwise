@@ -369,6 +369,8 @@ struct LayoutKey {
     color: Hsla,
     marked: Option<Range<usize>>,
     secret: bool,
+    /// Text before this byte offset paints in the second color.
+    read_prefix: Option<(usize, Hsla)>,
 }
 
 impl InputLayout {
@@ -1759,6 +1761,7 @@ pub struct TextInput {
     caret_color: Hsla,
     selection_color: Hsla,
     highlight: Option<(Range<usize>, Hsla)>,
+    read_prefix: Option<(usize, Hsla)>,
     flex: bool,
     full_width: bool,
     fixed_width: Option<Pixels>,
@@ -1789,6 +1792,7 @@ impl TextInput {
             caret_color: theme.gray(12),
             selection_color: selection_tint(),
             highlight: None,
+            read_prefix: None,
             flex: false,
             full_width: false,
             fixed_width: None,
@@ -1942,6 +1946,13 @@ impl TextInput {
         self
     }
 
+    /// Paint the text before `offset` in `color` -- what has already been
+    /// read, in the teleprompter.
+    pub(crate) fn read_prefix(mut self, offset: Option<usize>, color: Hsla) -> Self {
+        self.read_prefix = offset.map(|offset| (offset, color));
+        self
+    }
+
     pub(crate) fn highlight(mut self, range: Option<Range<usize>>, color: Hsla) -> Self {
         self.highlight = range.map(|range| (range, color));
         self
@@ -2032,6 +2043,7 @@ impl RenderOnce for TextInput {
             caret_color: self.caret_color,
             selection_color: self.selection_color,
             highlight: self.highlight,
+            read_prefix: self.read_prefix,
             multi_line,
             focused,
         };
@@ -2139,6 +2151,7 @@ struct TextBody {
     caret_color: Hsla,
     selection_color: Hsla,
     highlight: Option<(Range<usize>, Hsla)>,
+    read_prefix: Option<(usize, Hsla)>,
     multi_line: bool,
     focused: bool,
 }
@@ -2171,6 +2184,15 @@ impl TextBody {
             color: self.color,
             marked: state.marked_range.clone(),
             secret: state.secret,
+            read_prefix: self
+                .read_prefix
+                .filter(|(offset, _)| {
+                    !state.secret
+                        && state.marked_range.is_none()
+                        && *offset > 0
+                        && state.content.is_char_boundary(*offset)
+                })
+                .map(|(offset, color)| (offset.min(state.content.len()), color)),
         }
     }
 
@@ -2219,7 +2241,23 @@ impl TextBody {
             .into_iter()
             .filter(|run| run.len > 0)
             .collect(),
-            _ => vec![base],
+            _ => match key.read_prefix {
+                Some((offset, color)) if offset <= text.len() => vec![
+                    TextRun {
+                        len: offset,
+                        color,
+                        ..base.clone()
+                    },
+                    TextRun {
+                        len: text.len() - offset,
+                        ..base
+                    },
+                ]
+                .into_iter()
+                .filter(|run| run.len > 0)
+                .collect(),
+                _ => vec![base],
+            },
         };
         window
             .text_system()
@@ -3246,6 +3284,7 @@ mod tests {
             caret_color: gpui::black(),
             selection_color: gpui::black(),
             highlight: None,
+            read_prefix: None,
             multi_line: true,
             focused: false,
         }
@@ -3666,6 +3705,7 @@ mod tests {
                 color: gpui::black(),
                 marked: None,
                 secret: false,
+                read_prefix: None,
             },
             secret: None,
         }

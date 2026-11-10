@@ -51,9 +51,12 @@ pub enum HotkeyAction {
     ScreenshotWindow,
     ScreenshotArea,
     AddRecordingMarker,
+    TeleprompterPlayPause,
+    TeleprompterPreviousSentence,
+    TeleprompterNextSentence,
 }
 
-const ACTION_KEYS: [(&str, HotkeyAction); 14] = [
+const ACTION_KEYS: [(&str, HotkeyAction); 17] = [
     ("startStudioRecording", HotkeyAction::StartStudioRecording),
     ("startInstantRecording", HotkeyAction::StartInstantRecording),
     ("stopRecording", HotkeyAction::StopRecording),
@@ -80,7 +83,30 @@ const ACTION_KEYS: [(&str, HotkeyAction); 14] = [
         store::RECORDING_MARKER_HOTKEY,
         HotkeyAction::AddRecordingMarker,
     ),
+    (
+        store::TELEPROMPTER_PLAY_HOTKEY,
+        HotkeyAction::TeleprompterPlayPause,
+    ),
+    (
+        store::TELEPROMPTER_PREVIOUS_HOTKEY,
+        HotkeyAction::TeleprompterPreviousSentence,
+    ),
+    (
+        store::TELEPROMPTER_NEXT_HOTKEY,
+        HotkeyAction::TeleprompterNextSentence,
+    ),
 ];
+
+/// When an action's combo is taken from the rest of the system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope {
+    Always,
+    /// Only while a Studio recording runs.
+    Recording,
+    /// Only while the teleprompter is open, so reading it never needs the
+    /// pointer -- the app being recorded keeps the focus.
+    Teleprompter,
+}
 
 impl HotkeyAction {
     /// `#[serde(other)] Other` over there: a newer app's action survives in
@@ -113,10 +139,21 @@ impl HotkeyAction {
             .unwrap_or_default()
     }
 
+    fn scope(self) -> Scope {
+        match self {
+            Self::AddRecordingMarker => Scope::Recording,
+            Self::TeleprompterPlayPause
+            | Self::TeleprompterPreviousSentence
+            | Self::TeleprompterNextSentence => Scope::Teleprompter,
+            _ => Scope::Always,
+        }
+    }
+
     /// Registered only while a Studio recording runs, so its combo is never
     /// taken from other apps the rest of the time.
+    #[cfg(any(target_os = "linux", test))]
     fn recording_scoped(self) -> bool {
-        self == Self::AddRecordingMarker
+        self.scope() == Scope::Recording
     }
 }
 
@@ -135,6 +172,9 @@ struct Hotkeys {
     /// A Studio recording is running, so [`HotkeyAction::recording_scoped`]
     /// bindings are registered too.
     recording_scope: bool,
+    /// The teleprompter is open, so [`Scope::Teleprompter`] bindings are
+    /// registered too.
+    teleprompter_scope: bool,
     #[cfg(target_os = "linux")]
     capture_stop: Option<HotKey>,
 }
@@ -177,10 +217,12 @@ pub fn init(cx: &mut App) {
         unavailable: Vec::new(),
         paused: false,
         recording_scope: false,
+        teleprompter_scope: false,
         #[cfg(target_os = "linux")]
         capture_stop: None,
     });
     store::seed_recording_marker_hotkey();
+    store::seed_teleprompter_hotkeys();
     register_from_store(cx);
 
     // The press instant is taken on the OS callback, before the hop to the
@@ -227,11 +269,28 @@ pub fn set_recording_scope(active: bool, cx: &mut App) {
         return;
     }
     if active {
-        register_scoped_from_store(cx);
+        register_scoped_from_store(Scope::Recording, cx);
     } else {
-        unregister_scoped(cx);
+        unregister_scoped(Scope::Recording, cx);
     }
     crate::tray::refresh_menu(cx);
+}
+
+/// Registers the teleprompter's bindings while its window is open and
+/// releases them when it closes.
+pub fn set_teleprompter_scope(active: bool, cx: &mut App) {
+    if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().teleprompter_scope == active {
+        return;
+    }
+    cx.global_mut::<Hotkeys>().teleprompter_scope = active;
+    if cx.global::<Hotkeys>().paused {
+        return;
+    }
+    if active {
+        register_scoped_from_store(Scope::Teleprompter, cx);
+    } else {
+        unregister_scoped(Scope::Teleprompter, cx);
+    }
 }
 
 /// Re-read the store and swap every OS registration -- the settings page's
@@ -891,19 +950,23 @@ fn unregistered_scoped_actions(
         .collect()
 }
 
-fn registers_now(action: HotkeyAction, recording_scope: bool) -> bool {
-    !action.recording_scoped() || recording_scope
+fn registers_now(action: HotkeyAction, recording_scope: bool, teleprompter_scope: bool) -> bool {
+    match action.scope() {
+        Scope::Always => true,
+        Scope::Recording => recording_scope,
+        Scope::Teleprompter => teleprompter_scope,
+    }
 }
 
 fn register_from_store(cx: &mut App) {
     let stored = store::hotkeys_raw();
     let hotkeys = cx.global_mut::<Hotkeys>();
-    let scope = hotkeys.recording_scope;
+    let (recording, teleprompter) = (hotkeys.recording_scope, hotkeys.teleprompter_scope);
     for (key, value) in &stored {
         let Some((action, hotkey)) = stored_binding(key, value) else {
             continue;
         };
-        if !registers_now(action, scope) {
+        if !registers_now(action, recording, teleprompter) {
             continue;
         }
         register_binding(hotkeys, action, hotkey);
@@ -913,27 +976,26 @@ fn register_from_store(cx: &mut App) {
     crate::tray::refresh_menu(cx);
 }
 
-fn register_scoped_from_store(cx: &mut App) {
+fn register_scoped_from_store(scope: Scope, cx: &mut App) {
     let stored = store::hotkeys_raw();
     let hotkeys = cx.global_mut::<Hotkeys>();
     for (key, value) in &stored {
         let Some((action, hotkey)) = stored_binding(key, value) else {
             continue;
         };
-        if action.recording_scoped() && !hotkeys.bindings.iter().any(|(_, bound)| *bound == action)
-        {
+        if action.scope() == scope && !hotkeys.bindings.iter().any(|(_, bound)| *bound == action) {
             register_binding(hotkeys, action, hotkey);
         }
     }
     hotkeys.release_idle_manager();
 }
 
-fn unregister_scoped(cx: &mut App) {
+fn unregister_scoped(scope: Scope, cx: &mut App) {
     let hotkeys = cx.global_mut::<Hotkeys>();
     let (scoped, kept): (Vec<_>, Vec<_>) = hotkeys
         .bindings
         .drain(..)
-        .partition(|(_, action)| action.recording_scoped());
+        .partition(|(_, action)| action.scope() == scope);
     hotkeys.bindings = kept;
     for (hotkey, _) in scoped {
         #[cfg(target_os = "linux")]
@@ -1004,6 +1066,9 @@ fn dispatch(action: HotkeyAction, pressed_at: std::time::Instant, cx: &mut App) 
             RecordingSession::global(cx)
                 .update(cx, |session, cx| session.add_marker(pressed_at, cx));
         }
+        HotkeyAction::TeleprompterPlayPause => app_windows::teleprompter_hotkey(0, cx),
+        HotkeyAction::TeleprompterPreviousSentence => app_windows::teleprompter_hotkey(-1, cx),
+        HotkeyAction::TeleprompterNextSentence => app_windows::teleprompter_hotkey(1, cx),
         HotkeyAction::StartStudioRecording => start_from_hotkey(Mode::Studio, cx),
         HotkeyAction::StartInstantRecording => start_from_hotkey(Mode::Instant, cx),
         HotkeyAction::StopRecording => {
@@ -1243,6 +1308,7 @@ mod tests {
             unavailable: Vec::new(),
             paused: false,
             recording_scope: false,
+            teleprompter_scope: false,
             #[cfg(target_os = "linux")]
             capture_stop: None,
         };
@@ -1271,10 +1337,29 @@ mod tests {
         use super::{ACTION_KEYS, HotkeyAction, registers_now};
 
         for (_, action) in ACTION_KEYS {
-            assert!(registers_now(action, true));
+            assert!(registers_now(action, true, true));
             assert_eq!(
-                registers_now(action, false),
+                registers_now(action, false, true),
                 action != HotkeyAction::AddRecordingMarker,
+                "{action:?}"
+            );
+        }
+    }
+
+    /// The teleprompter's shortcuts take their combos only while it is open.
+    #[test]
+    fn teleprompter_shortcuts_wait_for_the_teleprompter() {
+        use super::{ACTION_KEYS, HotkeyAction, registers_now};
+
+        let teleprompter = [
+            HotkeyAction::TeleprompterPlayPause,
+            HotkeyAction::TeleprompterPreviousSentence,
+            HotkeyAction::TeleprompterNextSentence,
+        ];
+        for (_, action) in ACTION_KEYS {
+            assert_eq!(
+                registers_now(action, true, false),
+                !teleprompter.contains(&action),
                 "{action:?}"
             );
         }

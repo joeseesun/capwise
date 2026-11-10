@@ -999,6 +999,12 @@ const WHILE_RECORDING_SHORTCUTS: [&str; 4] = [
     store::RECORDING_MARKER_HOTKEY,
 ];
 
+const TELEPROMPTER_SHORTCUTS: [&str; 3] = [
+    store::TELEPROMPTER_PLAY_HOTKEY,
+    store::TELEPROMPTER_PREVIOUS_HOTKEY,
+    store::TELEPROMPTER_NEXT_HOTKEY,
+];
+
 const SHORTCUT_SAVED_NOTICE: std::time::Duration = std::time::Duration::from_secs(6);
 
 #[derive(Clone, Copy)]
@@ -1070,6 +1076,11 @@ fn shortcut_label(action: &str) -> &'static str {
         "togglePauseRecording" => tr::settings::shortcuts::label::pause(),
         "restartRecording" => tr::settings::shortcuts::label::restart(),
         store::RECORDING_MARKER_HOTKEY => tr::settings::shortcuts::label::add_marker(),
+        store::TELEPROMPTER_PLAY_HOTKEY => tr::settings::shortcuts::label::teleprompter_play(),
+        store::TELEPROMPTER_PREVIOUS_HOTKEY => {
+            tr::settings::shortcuts::label::teleprompter_previous()
+        }
+        store::TELEPROMPTER_NEXT_HOTKEY => tr::settings::shortcuts::label::teleprompter_next(),
         _ => tr::settings::shortcuts::label::fallback(),
     }
 }
@@ -1241,6 +1252,18 @@ fn shortcut_effect(
         store::RECORDING_MARKER_HOTKEY => ShortcutEffect {
             phrase: tr::settings::shortcuts::effect::add_marker,
             sentence: tr::settings::shortcuts::sentence::add_marker,
+        },
+        store::TELEPROMPTER_PLAY_HOTKEY => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::teleprompter_play,
+            sentence: tr::settings::shortcuts::sentence::teleprompter_play,
+        },
+        store::TELEPROMPTER_PREVIOUS_HOTKEY => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::teleprompter_previous,
+            sentence: tr::settings::shortcuts::sentence::teleprompter_previous,
+        },
+        store::TELEPROMPTER_NEXT_HOTKEY => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::teleprompter_next,
+            sentence: tr::settings::shortcuts::sentence::teleprompter_next,
         },
         _ => return None,
     };
@@ -1567,6 +1590,7 @@ impl SettingsWindow {
             .iter()
             .chain(RECORDING_SHORTCUTS.iter())
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
+            .chain(TELEPROMPTER_SHORTCUTS.iter())
         {
             if *other != action && self.shortcut_binding(other).as_ref() == Some(&hotkey) {
                 self.pages.hotkeys.remove(*other);
@@ -1651,6 +1675,7 @@ impl SettingsWindow {
         ];
 
         let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
+        let teleprompter = rows_for(&TELEPROMPTER_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
         let card = |id: &'static str, rows: Vec<gpui::AnyElement>, cx: &mut Context<Self>| {
@@ -1693,6 +1718,15 @@ impl SettingsWindow {
                 None,
                 None,
                 vec![card("shortcuts-while-recording", while_recording, cx)],
+            )
+            .into_any_element(),
+        );
+        sections.push(
+            self.section(
+                tr::settings::shortcuts::teleprompter_title(),
+                Some(tr::settings::shortcuts::teleprompter_description()),
+                None,
+                vec![card("shortcuts-teleprompter", teleprompter, cx)],
             )
             .into_any_element(),
         );
@@ -8240,9 +8274,10 @@ mod tests {
             .iter()
             .chain(RECORDING_SHORTCUTS.iter())
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
+            .chain(TELEPROMPTER_SHORTCUTS.iter())
             .copied()
             .collect();
-        assert_eq!(shown.len(), 12);
+        assert_eq!(shown.len(), 15);
         let settings = store::GeneralSettings::default();
         for action in &shown {
             assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);
@@ -8410,6 +8445,9 @@ mod tests {
             "togglePauseRecording" => "pause the current recording, or resume it".into(),
             "restartRecording" => "throw away the current take and start again".into(),
             "addRecordingMarker" => "mark this moment in the recording".into(),
+            "teleprompterPlayPause" => "play or pause the teleprompter".into(),
+            "teleprompterPreviousSentence" => "go back one sentence in the teleprompter".into(),
+            "teleprompterNextSentence" => "go forward one sentence in the teleprompter".into(),
             _ => String::new(),
         }
     }
@@ -8439,6 +8477,7 @@ mod tests {
                             .iter()
                             .chain(RECORDING_SHORTCUTS.iter())
                             .chain(WHILE_RECORDING_SHORTCUTS.iter())
+                            .chain(TELEPROMPTER_SHORTCUTS.iter())
                         {
                             let assembled = assembled_effect(action, &settings, mode);
                             assert_eq!(phrase(action, &settings, mode), assembled);
@@ -8454,7 +8493,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked.len(), 28, "every effect message is reachable");
+        assert_eq!(checked.len(), 31, "every effect message is reachable");
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
     }
 

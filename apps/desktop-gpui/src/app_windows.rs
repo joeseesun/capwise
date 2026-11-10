@@ -1797,6 +1797,33 @@ pub(crate) fn snap_teleprompter_to_camera(
     true
 }
 
+/// Resize the teleprompter to `size`. The compact strip goes under the
+/// camera (top centre of its display) with the traffic lights hidden; the full
+/// window keeps its top-left corner and gets them back.
+pub(crate) fn resize_teleprompter(
+    window: &gpui::Window,
+    size: Size<Pixels>,
+    compact: bool,
+    cx: &mut App,
+) {
+    let current = window.bounds();
+    let origin = if compact {
+        teleprompter_placement(None, size, cx).0.origin
+    } else {
+        current.origin
+    };
+    let Some(native) = platform::native_window(window) else {
+        return;
+    };
+    let bounds = Bounds { origin, size };
+    cx.spawn(async move |_| {
+        #[cfg(target_os = "macos")]
+        platform::set_titlebar_buttons_hidden(&native, compact);
+        place_teleprompter_frame(&native, bounds);
+    })
+    .detach();
+}
+
 /// Open (or re-show) the teleprompter -- `openTeleprompter()` in
 /// `utils/teleprompter.ts`, which reuses a live window with
 /// `unminimize()`/`show()`/`setFocus()` and otherwise builds a new one.
@@ -1819,8 +1846,10 @@ pub fn open_teleprompter(cx: &mut App) {
         return;
     }
 
+    let saved = crate::store::TeleprompterState::load();
+    let compact = saved.compact;
     let (bounds, display_id) = teleprompter_placement(
-        crate::store::TeleprompterState::load().window_bounds,
+        saved.window_bounds,
         size(
             px(teleprompter_window::TELEPROMPTER_WIDTH),
             px(teleprompter_window::TELEPROMPTER_HEIGHT),
@@ -1875,6 +1904,7 @@ pub fn open_teleprompter(cx: &mut App) {
     };
 
     cx.global_mut::<AppWindows>().teleprompter = Some(handle);
+    crate::hotkeys::set_teleprompter_scope(true, cx);
 
     // `commands.refreshWindowContentProtection()` on open
     // (`src/utils/teleprompter.ts:26,38,64`): a window that appears *after* the
@@ -1914,6 +1944,10 @@ pub fn open_teleprompter(cx: &mut App) {
     cx.spawn(async move |cx| {
         if let Some(native) = &native {
             place_teleprompter_frame(native, bounds);
+            #[cfg(target_os = "macos")]
+            if compact {
+                platform::set_titlebar_buttons_hidden(native, true);
+            }
             // `applyMacOSWindowMaterial("teleprompter")`: radius 22 on glass.
             let kind = platform::install_window_material(
                 native,
@@ -1983,6 +2017,18 @@ pub fn play_teleprompter(cx: &mut App) {
 /// Settings this window never hid the main one.
 pub fn teleprompter_closed(cx: &mut App) {
     cx.global_mut::<AppWindows>().teleprompter.take();
+    crate::hotkeys::set_teleprompter_scope(false, cx);
+}
+
+/// A teleprompter shortcut: 0 plays or pauses, -1 and 1 move a sentence. The
+/// teleprompter acts without taking the focus from the app being recorded.
+pub(crate) fn teleprompter_hotkey(direction: isize, cx: &mut App) {
+    let Some(handle) = cx.global::<AppWindows>().teleprompter else {
+        return;
+    };
+    let _ = handle.update(cx, |view, window, cx| {
+        view.hotkey(direction, window, cx);
+    });
 }
 
 /// `apply_content_protection`: `setSharingType: None` while a capture is

@@ -1628,6 +1628,21 @@ mod mac {
         );
     }
 
+    /// Hide or show the close, minimise and zoom buttons -- the
+    /// teleprompter's compact strip has no title row to put them in. Same
+    /// borrow rule as [`set_window_frame`].
+    pub fn set_titlebar_buttons_hidden(native: &NativeWindow, hidden: bool) {
+        use objc2::{msg_send, runtime::AnyObject};
+        unsafe {
+            for kind in 0usize..3 {
+                let button: *mut AnyObject = msg_send![&*native.0, standardWindowButton: kind];
+                if let Some(button) = button.as_ref() {
+                    let _: () = msg_send![button, setHidden: hidden];
+                }
+            }
+        }
+    }
+
     /// Whether a saved AppKit frame still lands on a connected display.
     ///
     /// A frame captured while an external monitor was attached keeps that

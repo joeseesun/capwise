@@ -1557,7 +1557,7 @@ impl GeneralSettings {
 pub const TELEPROMPTER: &str = "teleprompter";
 
 /// `TeleprompterStore` (`store.ts:17-35`), with `teleprompterDefaults` as the
-/// defaults: `{ script: "", fontSize: 30, wordsPerMinute: 150, lineHeight: 1.5,
+/// defaults: `{ script: "", fontSize: 30, wordsPerMinute: 150, lineHeight: 1.6,
 /// showCueMarkers: true, mirror: false, windowOpacityPercent: 92 }`.
 ///
 /// Read field by field for the same reason `GeneralSettings` is: a value
@@ -1575,7 +1575,24 @@ pub struct TeleprompterState {
     pub show_cue_markers: bool,
     pub mirror: bool,
     pub window_opacity_percent: u32,
+    /// Where the reading line sits in the script area, 0 (top) to 1. Near
+    /// the top keeps the eyes close to a camera above the window.
+    pub reading_line: f32,
+    /// How many CJK characters fit on one line. The text size follows the
+    /// window width from this, so resizing keeps lines the same length.
+    pub chars_per_line: f32,
+    /// A two-line strip under the camera instead of the full window.
+    pub compact: bool,
 }
+
+/// The reading line's allowed range and default, as fractions of the script
+/// area's height.
+pub const TELEPROMPTER_READING_LINE: (f32, f32, f32) = (0.12, 0.62, 0.3);
+/// Characters per line: allowed range and default.
+pub const TELEPROMPTER_CHARS_PER_LINE: (f32, f32, f32) = (8., 28., 14.);
+/// The script's horizontal padding on each side, which the characters-per-line
+/// maths (and its migration from a stored font size) subtracts.
+pub const TELEPROMPTER_TEXT_PADDING: f32 = 32.;
 
 impl TeleprompterState {
     /// The store keys, so a write call reads as the key it writes.
@@ -1589,6 +1606,9 @@ impl TeleprompterState {
     pub const SHOW_CUE_MARKERS: &'static str = "showCueMarkers";
     pub const MIRROR: &'static str = "mirror";
     pub const WINDOW_OPACITY_PERCENT: &'static str = "windowOpacityPercent";
+    pub const READING_LINE: &'static str = "readingLine";
+    pub const CHARS_PER_LINE: &'static str = "charsPerLine";
+    pub const COMPACT: &'static str = "compact";
 
     pub fn load() -> Self {
         Self::from_section(&store_section(TELEPROMPTER))
@@ -1618,6 +1638,35 @@ impl TeleprompterState {
                 Self::WINDOW_OPACITY_PERCENT,
                 defaults.window_opacity_percent,
             ),
+            reading_line: opt_f32_at(map, Self::READING_LINE)
+                .filter(|value| value.is_finite())
+                .map_or(defaults.reading_line, |value| {
+                    value.clamp(TELEPROMPTER_READING_LINE.0, TELEPROMPTER_READING_LINE.1)
+                }),
+            chars_per_line: Self::stored_chars_per_line(map),
+            compact: bool_at(map, Self::COMPACT, false),
+        }
+    }
+
+    /// Characters per line as stored, or -- for a script set up before the
+    /// size followed the width -- the line length its stored font size gave in
+    /// its stored window, so the text looks the same after the update.
+    fn stored_chars_per_line(map: &Map<String, Value>) -> f32 {
+        let (minimum, maximum, default) = TELEPROMPTER_CHARS_PER_LINE;
+        if let Some(value) = opt_f32_at(map, Self::CHARS_PER_LINE).filter(|v| v.is_finite()) {
+            return value.round().clamp(minimum, maximum);
+        }
+        let width = map
+            .get(Self::WINDOW_BOUNDS)
+            .and_then(|value| serde_json::from_value::<[f32; 4]>(value.clone()).ok())
+            .map(|bounds| bounds[2]);
+        match (opt_f32_at(map, Self::FONT_SIZE), width) {
+            (Some(size), Some(width)) if size.is_finite() && size > 0. && width.is_finite() => {
+                ((width - 2. * TELEPROMPTER_TEXT_PADDING) / size)
+                    .round()
+                    .clamp(minimum, maximum)
+            }
+            _ => default,
         }
     }
 
@@ -1635,6 +1684,9 @@ impl TeleprompterState {
             Self::SHOW_CUE_MARKERS => Value::Bool(self.show_cue_markers),
             Self::MIRROR => Value::Bool(self.mirror),
             Self::WINDOW_OPACITY_PERCENT => Value::from(self.window_opacity_percent),
+            Self::READING_LINE => Value::from(self.reading_line),
+            Self::CHARS_PER_LINE => Value::from(self.chars_per_line),
+            Self::COMPACT => Value::Bool(self.compact),
             _ => Value::Null,
         }
     }
@@ -1649,10 +1701,13 @@ impl Default for TeleprompterState {
             window_bounds: None,
             font_size: 30.,
             words_per_minute: 150,
-            line_height: 1.5,
+            line_height: 1.6,
             show_cue_markers: true,
             mirror: false,
             window_opacity_percent: 92,
+            reading_line: TELEPROMPTER_READING_LINE.2,
+            chars_per_line: TELEPROMPTER_CHARS_PER_LINE.2,
+            compact: false,
         }
     }
 }
@@ -1743,6 +1798,65 @@ pub fn seed_recording_marker_hotkey() {
         }
     }
     set_store_setting(HOTKEYS, RECORDING_MARKER_HOTKEY_SEEDED, Value::Bool(true));
+}
+
+pub const TELEPROMPTER_PLAY_HOTKEY: &str = "teleprompterPlayPause";
+pub const TELEPROMPTER_PREVIOUS_HOTKEY: &str = "teleprompterPreviousSentence";
+pub const TELEPROMPTER_NEXT_HOTKEY: &str = "teleprompterNextSentence";
+
+/// Set once the teleprompter shortcuts' defaults have been offered, so
+/// clearing one in Settings sticks across launches.
+const TELEPROMPTER_HOTKEYS_SEEDED: &str = "teleprompterSeeded";
+
+/// ⌃⌥P, ⌃⌥, and ⌃⌥. on macOS -- comma and period read as ‹ and ›, and
+/// nothing common owns them. Elsewhere Ctrl+Alt is AltGr on many layouts, so
+/// Alt+Shift instead.
+pub fn default_teleprompter_hotkeys() -> [(&'static str, Hotkey); 3] {
+    let macos = cfg!(target_os = "macos");
+    let key = |code: &str| Hotkey {
+        code: code.into(),
+        meta: false,
+        ctrl: macos,
+        alt: true,
+        shift: !macos,
+    };
+    [
+        (TELEPROMPTER_PLAY_HOTKEY, key("KeyP")),
+        (TELEPROMPTER_PREVIOUS_HOTKEY, key("Comma")),
+        (TELEPROMPTER_NEXT_HOTKEY, key("Period")),
+    ]
+}
+
+/// Gives the teleprompter shortcuts their defaults the first time this build
+/// runs, skipping any the user bound already or whose combo is taken.
+pub fn seed_teleprompter_hotkeys() {
+    if store_section(HOTKEYS)
+        .get(TELEPROMPTER_HOTKEYS_SEEDED)
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return;
+    }
+    let mut map = hotkeys_raw();
+    let mut changed = false;
+    for (key, default) in default_teleprompter_hotkeys() {
+        let taken = map
+            .values()
+            .filter_map(hotkey_from_value)
+            .any(|hotkey| hotkey == default);
+        if map.contains_key(key) || taken {
+            continue;
+        }
+        let Ok(value) = serde_json::to_value(&default) else {
+            return;
+        };
+        map.insert(key.into(), value);
+        changed = true;
+    }
+    if changed && !set_hotkeys_raw(&map) {
+        return;
+    }
+    set_store_setting(HOTKEYS, TELEPROMPTER_HOTKEYS_SEEDED, Value::Bool(true));
 }
 
 // -- Transcription hints --------------------------------------------------------
@@ -3373,6 +3487,35 @@ mod tests {
     }
 
     #[test]
+    fn teleprompter_line_length_migrates_from_the_old_font_size_and_clamps() {
+        let mut map = Map::new();
+        assert_eq!(TeleprompterState::from_section(&map).chars_per_line, 14.);
+        assert_eq!(TeleprompterState::from_section(&map).reading_line, 0.3);
+        // 560 wide at 30pt: (560 - 64) / 30 = 16.5, rounded.
+        map.insert(TeleprompterState::FONT_SIZE.into(), serde_json::json!(30.));
+        map.insert(
+            TeleprompterState::WINDOW_BOUNDS.into(),
+            serde_json::json!([0., 0., 560., 320.]),
+        );
+        assert_eq!(TeleprompterState::from_section(&map).chars_per_line, 17.);
+        map.insert(
+            TeleprompterState::CHARS_PER_LINE.into(),
+            serde_json::json!(99),
+        );
+        map.insert(
+            TeleprompterState::READING_LINE.into(),
+            serde_json::json!(-4),
+        );
+        let loaded = TeleprompterState::from_section(&map);
+        assert_eq!(loaded.chars_per_line, 28.);
+        assert_eq!(loaded.reading_line, 0.12);
+        assert_eq!(
+            loaded.value_for(TeleprompterState::CHARS_PER_LINE),
+            serde_json::json!(28.)
+        );
+    }
+
+    #[test]
     fn the_teleprompter_section_round_trips_per_key() {
         let store = TempStore::new(
             "teleprompter",
@@ -3384,7 +3527,7 @@ mod tests {
         // Everything the section does not carry takes `teleprompterDefaults`.
         assert_eq!(loaded.font_size, 30.);
         assert_eq!(loaded.words_per_minute, 150);
-        assert_eq!(loaded.line_height, 1.5);
+        assert_eq!(loaded.line_height, 1.6);
         assert!(loaded.show_cue_markers);
         assert!(!loaded.mirror);
         assert_eq!(loaded.window_opacity_percent, 92);

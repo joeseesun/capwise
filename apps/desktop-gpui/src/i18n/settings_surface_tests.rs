@@ -283,6 +283,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "While recording",
         ),
         (
+            tr::settings::shortcuts::teleprompter_title(),
+            "Teleprompter",
+        ),
+        (
+            tr::settings::shortcuts::teleprompter_description(),
+            "Work while the teleprompter is open, even when another app has the focus.",
+        ),
+        (
             tr::settings::shortcuts::after_studio::title(),
             "After recording",
         ),
@@ -380,6 +388,18 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::settings::shortcuts::label::stop(), "Stop recording"),
         (tr::settings::shortcuts::label::add_marker(), "Add marker"),
+        (
+            tr::settings::shortcuts::label::teleprompter_play(),
+            "Play or pause teleprompter",
+        ),
+        (
+            tr::settings::shortcuts::label::teleprompter_previous(),
+            "Teleprompter previous sentence",
+        ),
+        (
+            tr::settings::shortcuts::label::teleprompter_next(),
+            "Teleprompter next sentence",
+        ),
         (tr::settings::shortcuts::label::pause(), "Pause or resume"),
         (
             tr::settings::shortcuts::label::restart(),
