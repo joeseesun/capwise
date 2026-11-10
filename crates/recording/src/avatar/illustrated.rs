@@ -1,5 +1,6 @@
 use super::{
     AvatarKind, Pose,
+    idle_body::IdleBody,
     layers::LayeredHead,
     motion::{HeadRig, sample},
 };
@@ -17,6 +18,7 @@ struct Artwork {
     mouth: Region,
     head: HeadRig,
     layers: Option<LayeredHead>,
+    idle_body: IdleBody,
 }
 
 fn crop([x, y, width, height]: Region) -> IntRect {
@@ -120,9 +122,11 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
         };
         let neutral = decode(neutral);
         let layers = LayeredHead::new(kind, &neutral);
+        let idle_body = IdleBody::new(kind, &neutral).expect("illustration has relaxed costume");
         Artwork {
             neutral,
             layers,
+            idle_body,
             expression: decode(expression),
             bubble: crop(relative(bubble)),
             eyes: eyes.map(relative),
@@ -192,15 +196,20 @@ fn blend(
 }
 
 fn extend_background(frame: &Pixmap) -> Pixmap {
-    let size = frame.height();
+    let padding = frame.height() / 22;
+    let size = frame.height() + padding * 2;
     let mut canvas = Pixmap::new(size, size).expect("valid avatar dimensions");
     let stride = frame.width() as usize * 4;
     let inset = ((size - frame.width()) / 2) as usize * 4;
-    for (source, target) in frame
-        .data()
-        .chunks_exact(stride)
-        .zip(canvas.data_mut().chunks_exact_mut(size as usize * 4))
+    for (row, target) in canvas
+        .data_mut()
+        .chunks_exact_mut(size as usize * 4)
+        .enumerate()
     {
+        let y = row
+            .saturating_sub(padding as usize)
+            .min(frame.height() as usize - 1);
+        let source = &frame.data()[y * stride..(y + 1) * stride];
         let (left, rest) = target.split_at_mut(inset);
         let (center, right) = rest.split_at_mut(stride);
         for pixel in left.chunks_exact_mut(4) {
@@ -275,7 +284,7 @@ pub(super) fn draw(target: &mut Pixmap, kind: AvatarKind, pose: Pose, split: boo
         artwork.head.render(frame, pose)
     };
     let frame = if split {
-        extend_background(&frame)
+        extend_background(&artwork.idle_body.draw(&frame))
     } else {
         frame
             .clone_rect(artwork.bubble)

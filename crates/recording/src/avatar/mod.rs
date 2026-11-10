@@ -6,6 +6,8 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::AvatarWorker;
 #[cfg(any(target_os = "macos", test))]
+mod idle_body;
+#[cfg(any(target_os = "macos", test))]
 mod illustrated;
 #[cfg(any(target_os = "macos", test))]
 mod layers;

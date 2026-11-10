@@ -77,6 +77,12 @@ impl Portrait {
         let still = Transform::identity();
         self.oval([76., 540., 488., 80.], 0xd0d8d1, still);
         let breath = elapsed.mul_add(1.8, 0.).sin() * 2.;
+        if split {
+            self.oval([149., 463. + breath, 80., 142.], shirt, still);
+            self.oval([411., 463. + breath, 80., 142.], shirt, still);
+            self.oval([154., 571. + breath, 47., 49.], fur, still);
+            self.oval([439., 571. + breath, 47., 49.], fur, still);
+        }
         self.oval([175., 426. + breath, 290., 260.], shirt, still);
         self.curve(
             [
