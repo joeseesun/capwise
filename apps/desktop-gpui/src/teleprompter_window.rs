@@ -736,12 +736,8 @@ impl TeleprompterWindow {
         };
         self.clicked_offset = Some(offset);
         self.manual_anchor = Some(offset);
-        let following = self.follow_active();
         self.pause_follow();
         self.bring_to_reading_line(offset, cx);
-        if following {
-            cx.on_next_frame(window, |this, window, cx| this.start_follow(window, cx));
-        }
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -1378,6 +1374,7 @@ impl TeleprompterWindow {
         };
         let bar = div()
             .id("prompter-bar")
+            .occlude()
             .on_hover(cx.listener(|this, over: &bool, _, cx| {
                 this.over_bar = *over;
                 cx.notify();
@@ -1561,6 +1558,7 @@ impl TeleprompterWindow {
         Some(
             ui::Popover::glass(&theme, px(260.))
                 .bg(Hsla::from(theme.gray_1))
+                .occlude()
                 .bottom(px(58.))
                 .left(gpui::relative(0.5))
                 .ml(px(-130.))
