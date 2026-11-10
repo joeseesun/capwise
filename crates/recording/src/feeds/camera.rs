@@ -1912,7 +1912,14 @@ impl Message<NewNativeFrame> for CameraFeed {
                 let Some(worker) = &self.avatar_worker else {
                     return;
                 };
-                let frame = match worker.render(msg.0, kind).await {
+                let frame = match worker
+                    .render(
+                        msg.0,
+                        kind,
+                        crate::avatar::AvatarControl::split_at(snapshot),
+                    )
+                    .await
+                {
                     Ok(frame) => frame,
                     Err(error) => {
                         tracing::error!("Avatar frame failed: {error:#}");

@@ -6,7 +6,21 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::AvatarWorker;
 #[cfg(any(target_os = "macos", test))]
+mod cat;
+#[cfg(any(target_os = "macos", test))]
+mod idle_body;
+#[cfg(any(target_os = "macos", test))]
+mod illustrated;
+#[cfg(any(target_os = "macos", test))]
+mod layers;
+#[cfg(any(target_os = "macos", test))]
+mod motion;
+#[cfg(any(target_os = "macos", test))]
 mod paint;
+#[cfg(any(target_os = "macos", test))]
+mod tracking;
+#[cfg(any(target_os = "macos", test))]
+mod views;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,16 +31,40 @@ pub enum AvatarKind {
     Cat = 1,
     Bear = 2,
     Fox = 3,
+    Raven = 4,
+    #[serde(
+        alias = "curlyPresenter",
+        alias = "blackSuitPresenter",
+        alias = "blueJacketPresenter"
+    )]
+    RetroRobot = 5,
+    SilverPresenter = 6,
 }
 
 impl AvatarKind {
-    pub const ALL: [Self; 4] = [Self::Camera, Self::Cat, Self::Bear, Self::Fox];
+    pub const ALL: [Self; 7] = [
+        Self::Camera,
+        Self::Cat,
+        Self::Bear,
+        Self::Fox,
+        Self::Raven,
+        Self::RetroRobot,
+        Self::SilverPresenter,
+    ];
+
+    pub fn uses_illustration(self) -> bool {
+        matches!(self, Self::Raven | Self::RetroRobot | Self::SilverPresenter)
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct AvatarControl(AtomicU64);
 
 impl AvatarControl {
+    const KIND_MASK: u64 = 255;
+    const SPLIT: u64 = 256;
+    const REVISION: u64 = 512;
+
     pub fn snapshot(&self) -> u64 {
         self.0.load(Ordering::Acquire)
     }
@@ -37,7 +75,7 @@ impl AvatarControl {
 
     pub fn kind_at(snapshot: u64) -> AvatarKind {
         AvatarKind::ALL
-            .get((snapshot & 255) as usize)
+            .get((snapshot & Self::KIND_MASK) as usize)
             .copied()
             .unwrap_or_default()
     }
@@ -46,8 +84,21 @@ impl AvatarControl {
         let _ = self
             .0
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
-                Some((old & !255).wrapping_add(256) | kind as u64)
+                Some((old & !Self::KIND_MASK).wrapping_add(Self::REVISION) | kind as u64)
             });
+    }
+
+    pub(crate) fn split_at(snapshot: u64) -> bool {
+        snapshot & Self::SPLIT != 0
+    }
+
+    pub fn set_split(&self, split: bool) -> bool {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
+                (Self::split_at(old) != split)
+                    .then(|| old.wrapping_add(Self::REVISION) ^ Self::SPLIT)
+            })
+            .is_ok()
     }
 }
 
@@ -60,6 +111,7 @@ pub(crate) struct Pose {
     pub left_eye: f32,
     pub right_eye: f32,
     pub mouth: f32,
+    pub mouth_width: f32,
     pub smile: f32,
 }
 
@@ -73,6 +125,7 @@ impl Default for Pose {
             left_eye: 1.,
             right_eye: 1.,
             mouth: 0.,
+            mouth_width: 0.,
             smile: 0.,
         }
     }
@@ -80,27 +133,27 @@ impl Default for Pose {
 
 #[cfg(any(target_os = "macos", test))]
 impl Pose {
-    pub fn approach(&mut self, next: Self, amount: f32) {
-        fn blend(old: &mut f32, next: f32, amount: f32) {
-            if next.is_finite() {
-                *old += (next - *old) * amount;
+    pub fn approach(&mut self, next: Self, dt: f32) {
+        fn blend(current: &mut f32, target: f32, hz: f32, dt: f32) {
+            if target.is_finite() {
+                let alpha = 1. - (-std::f32::consts::TAU * hz * dt).exp();
+                *current += (target - *current) * alpha;
             }
         }
-        blend(&mut self.yaw, next.yaw.clamp(-1., 1.), amount);
-        blend(&mut self.pitch, next.pitch.clamp(-1., 1.), amount);
-        blend(&mut self.roll, next.roll.clamp(-0.5, 0.5), amount);
+
+        blend(&mut self.yaw, next.yaw.clamp(-1., 1.), 9., dt);
+        blend(&mut self.pitch, next.pitch.clamp(-1., 1.), 9., dt);
+        blend(&mut self.roll, next.roll.clamp(-0.5, 0.5), 9., dt);
+        blend(&mut self.left_eye, next.left_eye.clamp(0., 1.), 22., dt);
+        blend(&mut self.right_eye, next.right_eye.clamp(0., 1.), 22., dt);
+        blend(&mut self.mouth, next.mouth.clamp(0., 1.), 22., dt);
         blend(
-            &mut self.left_eye,
-            next.left_eye.clamp(0., 1.),
-            amount.max(0.65),
+            &mut self.mouth_width,
+            next.mouth_width.clamp(-1., 1.),
+            15.,
+            dt,
         );
-        blend(
-            &mut self.right_eye,
-            next.right_eye.clamp(0., 1.),
-            amount.max(0.65),
-        );
-        blend(&mut self.mouth, next.mouth.clamp(0., 1.), amount.max(0.65));
-        blend(&mut self.smile, next.smile.clamp(0., 1.), amount);
+        blend(&mut self.smile, next.smile.clamp(0., 1.), 12., dt);
     }
 }
 
@@ -117,6 +170,19 @@ mod tests {
         control.set(AvatarKind::Cat);
         assert_eq!(control.kind(), AvatarKind::Cat);
         assert_ne!(first, control.snapshot());
+    }
+
+    #[test]
+    fn retired_avatars_restore_to_a_virtual_character() {
+        for saved in [
+            "\"curlyPresenter\"",
+            "\"blackSuitPresenter\"",
+            "\"blueJacketPresenter\"",
+        ] {
+            let avatar = serde_json::from_str::<AvatarKind>(saved).unwrap();
+            assert_eq!(avatar, AvatarKind::RetroRobot);
+            assert_eq!(serde_json::to_string(&avatar).unwrap(), "\"retroRobot\"");
+        }
     }
 
     #[test]
