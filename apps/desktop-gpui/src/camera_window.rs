@@ -180,19 +180,28 @@ mod inline_preview_tests {
     }
 
     #[test]
-    fn a_shrunk_preview_fits_its_toolbar_inside_it() {
-        // Not shrunk: the size-driven scale and every button.
-        assert_eq!(toolbar_fit(0.85, None), (0.85, TOOLBAR_MOST_BUTTONS));
-        // Wide enough: unchanged.
-        assert_eq!(toolbar_fit(0.7, Some(300.)), (0.7, TOOLBAR_MOST_BUTTONS));
-        for width in [81., 100., 120., 144., 160., 200.] {
-            let (scale, buttons) = toolbar_fit(1., Some(width));
-            let drawn = (42. * buttons as f32 + 4.) * scale + 2.;
+    fn toolbar_fits_every_button_in_a_supported_camera_window() {
+        let base_scale = 0.85;
+        assert_eq!(
+            toolbar_fit(base_scale, 400.),
+            (base_scale, TOOLBAR_MOST_BUTTONS)
+        );
+        for width in [CAMERA_MIN_SIZE, 202., CAMERA_PRESET_SMALL, 280.] {
+            let (scale, buttons) = toolbar_fit(base_scale, width);
+            assert_eq!(buttons, TOOLBAR_MOST_BUTTONS, "{width}");
+            let drawn = toolbar_content_width(buttons) * scale + 2.;
             assert!(drawn <= width - 8. + 0.01, "{width}: {drawn}");
-            assert!(scale >= 0.4);
         }
-        // A portrait sliver keeps close, size and shape.
-        assert_eq!(toolbar_fit(1., Some(81.)).1, 3);
+    }
+
+    #[test]
+    fn toolbar_still_fits_when_capture_target_is_narrower_than_a_camera_window() {
+        for width in [81., 100., 120., 144.] {
+            let (scale, buttons) = toolbar_fit(1., width);
+            let drawn = toolbar_content_width(buttons) * scale + 2.;
+            assert!(drawn <= width - 8. + 0.01, "{width}: {drawn}");
+        }
+        assert_eq!(toolbar_fit(1., 81.).1, 3);
     }
 
     #[test]
@@ -241,24 +250,30 @@ fn normalized_size(state: &CameraWindowState) -> f32 {
 }
 
 const TOOLBAR_MOST_BUTTONS: usize = if cfg!(target_os = "macos") { 7 } else { 5 };
+const TOOLBAR_ICON_SIZE: f32 = 22.;
+const TOOLBAR_BUTTON_PADDING: f32 = 8.;
+const TOOLBAR_SPACING: f32 = 4.;
 
-/// The fit uses each button's footprint (a 22px icon in 8px padding, 4px
-/// apart, in a 4px-padded strip with a 1px border). The preview-only blur,
-/// then mirror, buttons go first, before the rest get too small to hit.
-fn toolbar_fit(base_scale: f32, width: Option<f32>) -> (f32, usize) {
-    const SMALLEST_COMFORTABLE: f32 = 0.6;
-    const SMALLEST: f32 = 0.4;
-    let Some(width) = width else {
-        return (base_scale, TOOLBAR_MOST_BUTTONS);
-    };
-    let fit = |buttons: usize| (width - 10.) / (42. * buttons as f32 + 4.);
+fn toolbar_content_width(buttons: usize) -> f32 {
+    let button_width = TOOLBAR_ICON_SIZE + 2. * TOOLBAR_BUTTON_PADDING;
+    button_width * buttons as f32 + TOOLBAR_SPACING * (buttons + 1) as f32
+}
+
+fn toolbar_fit(base_scale: f32, width: f32) -> (f32, usize) {
+    let fit = |buttons| (width - 10.).max(0.) / toolbar_content_width(buttons);
+    if width >= CAMERA_MIN_SIZE {
+        return (
+            base_scale.min(fit(TOOLBAR_MOST_BUTTONS)),
+            TOOLBAR_MOST_BUTTONS,
+        );
+    }
     for buttons in (4..=TOOLBAR_MOST_BUTTONS).rev() {
         let scale = base_scale.min(fit(buttons));
-        if scale >= SMALLEST_COMFORTABLE {
+        if scale >= 0.6 {
             return (scale, buttons);
         }
     }
-    (base_scale.min(fit(3)).max(SMALLEST), 3)
+    (base_scale.min(fit(3)), 3)
 }
 
 /// The visible bubble's corner radius. The shipped Tauri experience is the
@@ -1622,12 +1637,12 @@ impl CameraToolbarView {
 }
 
 impl Render for CameraToolbarView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(camera) = self.camera.upgrade() else {
             return div().into_any_element();
         };
         camera.update(cx, |camera, cx| {
-            camera.render_toolbar(cx).into_any_element()
+            camera.render_toolbar(window, cx).into_any_element()
         })
     }
 }
@@ -2448,11 +2463,15 @@ impl CameraWindow {
             .or(self.retained_aspect)
     }
 
-    fn toolbar_fit(&self) -> (f32, usize) {
-        toolbar_fit(
-            0.7 + normalized_size(&self.state) * 0.3,
-            self.picker_size.map(|(width, _)| width),
-        )
+    fn toolbar_fit(&self, window: &Window) -> (f32, usize) {
+        let viewport = window.viewport_size();
+        let width = f32::from(viewport.width);
+        let width = if self.inline {
+            self.inline_size((width, viewport.height.into())).0
+        } else {
+            width
+        };
+        toolbar_fit(0.7 + normalized_size(&self.state) * 0.3, width)
     }
 
     /// Pushes the chrome inputs the preview renders with (its own notify is
@@ -2783,7 +2802,7 @@ impl CameraWindow {
                         ui::Tooltip::new(&theme, tr::main::studio_layout::heading()).view(cx)
                     })
             })
-            .p(px(8. * scale))
+            .p(px(TOOLBAR_BUTTON_PADDING * scale))
             .rounded(px(8. * scale))
             .when(pressed, |this| {
                 this.bg(theme.gray_3).text_color(theme.gray_12)
@@ -2812,7 +2831,7 @@ impl CameraWindow {
                     .child(
                         svg()
                             .path(icon)
-                            .size(px(22. * scale))
+                            .size(px(TOOLBAR_ICON_SIZE * scale))
                             .text_color(if pressed {
                                 theme.gray_12.into()
                             } else {
@@ -3009,9 +3028,9 @@ impl CameraWindow {
         )
     }
 
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let (scale, buttons) = self.toolbar_fit();
+        let (scale, buttons) = self.toolbar_fit(window);
         #[cfg(target_os = "macos")]
         let (mirror_failed, blur_failed) = (self.effect_failures.mirror, self.effect_failures.blur);
         #[cfg(target_os = "macos")]
@@ -3040,8 +3059,8 @@ impl CameraWindow {
                 div()
                     .flex()
                     .flex_row()
-                    .gap(px(4. * scale))
-                    .p(px(4. * scale))
+                    .gap(px(TOOLBAR_SPACING * scale))
+                    .p(px(TOOLBAR_SPACING * scale))
                     .rounded(px(12. * scale))
                     .bg(theme.gray_1)
                     .border_1()
