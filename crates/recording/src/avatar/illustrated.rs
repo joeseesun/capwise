@@ -2,7 +2,7 @@ use super::{
     AvatarKind, Pose,
     idle_body::IdleBody,
     layers::LayeredHead,
-    motion::{HeadRig, sample},
+    motion::{RavenHead, sample},
 };
 use std::sync::OnceLock;
 use tiny_skia::{Color, FilterQuality, IntRect, Pixmap, PixmapPaint, Transform};
@@ -16,9 +16,13 @@ struct Artwork {
     eyes: [Region; 2],
     gaze: [f32; 2],
     mouth: Region,
-    head: HeadRig,
-    layers: Option<LayeredHead>,
+    head: Head,
     idle_body: IdleBody,
+}
+
+enum Head {
+    Layered(Box<LayeredHead>),
+    Raven(RavenHead),
 }
 
 fn crop([x, y, width, height]: Region) -> IntRect {
@@ -32,7 +36,7 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
 
     let illustrated = include_bytes!("art/illustrated.png").as_slice();
     let illustrated_expression = include_bytes!("art/illustrated-expression.png").as_slice();
-    let (cache, neutral, expression, split, bubble, eyes, gaze, mouth, head, neck_y) = match kind {
+    let (cache, neutral, expression, split, bubble, eyes, gaze, mouth) = match kind {
         AvatarKind::Raven => (
             &RAVEN,
             illustrated,
@@ -42,8 +46,6 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [[160, 133, 58, 35], [246, 133, 40, 35]],
             [0., 0.],
             [182, 176, 125, 57],
-            [86, 64, 213, 204],
-            280,
         ),
         AvatarKind::RetroRobot => (
             &ROBOT,
@@ -54,8 +56,6 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [[622, 159, 51, 32], [701, 159, 49, 32]],
             [0., 0.],
             [653, 201, 69, 28],
-            [571, 101, 226, 153],
-            295,
         ),
         AvatarKind::SilverPresenter => (
             &SILVER,
@@ -66,8 +66,6 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [[411, 331, 49, 43], [478, 330, 49, 43]],
             [-1.5, 1.5],
             [425, 398, 92, 38],
-            [353, 195, 235, 278],
-            517,
         ),
         _ => return None,
     };
@@ -80,18 +78,20 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
                 .expect("avatar art within sheet")
         };
         let neutral = decode(neutral);
-        let layers = LayeredHead::new(kind, &neutral);
+        let head = match LayeredHead::new(kind, &neutral) {
+            Some(layers) => Head::Layered(Box::new(layers)),
+            None => Head::Raven(RavenHead::new(&neutral)),
+        };
         let idle_body = IdleBody::new(kind, &neutral).expect("illustration has relaxed costume");
         Artwork {
             neutral,
-            layers,
+            head,
             idle_body,
             expression: decode(expression),
             bubble: crop(relative(bubble)),
             eyes: eyes.map(relative),
             gaze,
             mouth: relative(mouth),
-            head: HeadRig::new(relative(head), neck_y - split[1]),
         }
     }))
 }
@@ -228,24 +228,20 @@ pub(super) fn draw(target: &mut Pixmap, kind: AvatarKind, pose: Pose, split: boo
         let closed = ((0.52 - opening) / 0.41).clamp(0., 1.);
         blend(&artwork.expression, &mut frame, eye, closed, true);
     }
-    let costume = (split || kind == AvatarKind::Raven).then_some(&artwork.idle_body);
-    let frame = if let Some(layers) = &artwork.layers {
-        layers.draw(frame, pose, costume)
-    } else {
-        let speaking = ((pose.mouth - 0.025) / 0.56).clamp(0., 1.);
-        blend(
-            &artwork.expression,
-            &mut frame,
-            artwork.mouth,
-            speaking,
-            false,
-        );
-        shape_mouth(&mut frame, artwork.mouth, pose);
-        let frame = artwork.head.render(frame, pose);
-        if let Some(body) = costume {
-            body.draw(&frame)
-        } else {
-            frame
+    let costume = split.then_some(&artwork.idle_body);
+    let frame = match &artwork.head {
+        Head::Layered(layers) => layers.draw(frame, pose, costume),
+        Head::Raven(head) => {
+            let speaking = ((pose.mouth - 0.025) / 0.56).clamp(0., 1.);
+            blend(
+                &artwork.expression,
+                &mut frame,
+                artwork.mouth,
+                speaking,
+                false,
+            );
+            shape_mouth(&mut frame, artwork.mouth, pose);
+            artwork.idle_body.draw(&head.render(frame, pose))
         }
     };
     let frame = if split {
@@ -280,4 +276,39 @@ pub(super) fn draw(target: &mut Pixmap, kind: AvatarKind, pose: Pose, split: boo
         None,
     );
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raven_neck_stays_fixed_during_head_turns() {
+        let mut neutral = Pixmap::new(640, 640).unwrap();
+        let mut moving = Pixmap::new(640, 640).unwrap();
+        assert!(draw(
+            &mut neutral,
+            AvatarKind::Raven,
+            Pose::default(),
+            false
+        ));
+        for direction in [-1., 1.] {
+            assert!(draw(
+                &mut moving,
+                AvatarKind::Raven,
+                Pose {
+                    yaw: direction,
+                    pitch: direction,
+                    roll: direction * 0.5,
+                    ..Pose::default()
+                },
+                false,
+            ));
+            assert_ne!(neutral.data(), moving.data());
+            for y in 369..400 {
+                let row = (y * 640 + 270) * 4..(y * 640 + 420) * 4;
+                assert_eq!(&neutral.data()[row.clone()], &moving.data()[row]);
+            }
+        }
+    }
 }

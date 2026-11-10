@@ -1,72 +1,97 @@
 use super::Pose;
-use tiny_skia::Pixmap;
+use tiny_skia::{FilterQuality, IntRect, Mask, Pixmap, PixmapPaint, Transform};
 
-pub(super) struct HeadRig {
-    center: [f32; 2],
-    radius: [f32; 2],
-    neck_y: f32,
+const RAVEN_NECK_ROW: u32 = 183;
+
+pub(super) struct RavenHead {
+    plate: Pixmap,
+    matte: Mask,
+    bounds: IntRect,
 }
 
-impl HeadRig {
-    pub(super) fn new([x, y, width, height]: [u32; 4], neck_y: u32) -> Self {
-        let radius = [width as f32 * 0.5, height as f32 * 0.5];
+impl RavenHead {
+    pub(super) fn new(frame: &Pixmap) -> Self {
+        let bounds =
+            IntRect::from_xywh(0, 0, frame.width(), RAVEN_NECK_ROW).expect("raven head bounds");
+        let mut matte = Mask::new(bounds.width(), bounds.height()).expect("raven head matte");
+        let mut plate = frame.clone();
+        let width = frame.width() as usize;
+        let stride = width * 4;
+        let original = frame.data();
+        let neck = &original[RAVEN_NECK_ROW as usize * stride..][..stride];
+        for (y, (row, alpha_row)) in plate
+            .data_mut()
+            .chunks_exact_mut(stride)
+            .zip(matte.data_mut().chunks_exact_mut(width))
+            .enumerate()
+        {
+            let original_row = &original[y * stride..][..stride];
+            let left = &original_row[..4];
+            let right = &original_row[stride - 4..];
+            let neck_opacity = ((y as f32 - 151.) / 26.).clamp(0., 1.);
+            for (x, (target, alpha)) in row.chunks_exact_mut(4).zip(alpha_row).enumerate() {
+                let offset = x * 4;
+                let source = &original_row[offset..offset + 4];
+                let neck_pixel = &neck[offset..offset + 4];
+                let background_weight = x as f32 / (width - 1) as f32;
+                let neck_weight = neck_opacity * raven_ink(neck_pixel);
+                for channel in 0..3 {
+                    let background = mix(left[channel], right[channel], background_weight);
+                    target[channel] = mix(background, neck_pixel[channel], neck_weight);
+                }
+                let feather_start = if x > 220 && source[0] > 70 {
+                    179.
+                } else {
+                    166.
+                };
+                let feather = ((RAVEN_NECK_ROW as f32 - y as f32)
+                    / (RAVEN_NECK_ROW as f32 - feather_start))
+                    .clamp(0., 1.);
+                *alpha = (raven_ink(source) * feather * 255.).round() as u8;
+            }
+        }
         Self {
-            center: [x as f32 + radius[0], y as f32 + radius[1]],
-            radius,
-            neck_y: neck_y as f32,
+            plate,
+            matte,
+            bounds,
         }
     }
 
     pub(super) fn render(&self, frame: Pixmap, pose: Pose) -> Pixmap {
-        if pose.yaw.abs() + pose.pitch.abs() + pose.roll.abs() < 0.004 {
-            return frame;
-        }
-        let [cx, cy] = self.center;
-        let [rx, ry] = self.radius;
-        let (yaw_sin, yaw_cos) = (pose.yaw * 0.38).sin_cos();
-        let (pitch_sin, pitch_cos) = (pose.pitch * 0.30).sin_cos();
-        let (roll_sin, roll_cos) = (pose.roll * 0.52).sin_cos();
-        let width = frame.width() as usize;
-        let height = frame.height() as usize;
-        let left = (cx - rx * 1.46).max(0.) as usize;
-        let right = ((cx + rx * 1.46).ceil() as usize).min(width);
-        let top = (cy - ry * 1.28).max(0.) as usize;
-        let bottom = (self.neck_y.ceil() as usize).min(height);
-        let mut result = frame.clone();
-        let source = frame.data();
-        let output = result.data_mut();
-
-        for y in top..bottom {
-            let y_float = y as f32;
-            let ny = (y_float - cy) / ry;
-            let head_depth = smoothstep((1.23 - ny.abs()) / 0.50);
-            let y_weight =
-                smoothstep((ny + 1.28) / 0.28) * smoothstep((self.neck_y - y_float) / (ry * 0.42));
-            let neck_offset = y_float - self.neck_y;
-            let row = &mut output[(y * width + left) * 4..(y * width + right) * 4];
-            for (col, pixel) in row.chunks_exact_mut(4).enumerate() {
-                let x = (col + left) as f32;
-                let nx = (x - cx) / rx;
-                let weight = y_weight * smoothstep((1.46 - nx.abs()) / 0.46);
-                let depth = smoothstep((1.20 - nx.abs()) / 0.55) * head_depth;
-
-                let rotated_x = (x - cx) * roll_cos + neck_offset * roll_sin;
-                let rotated_y = neck_offset * roll_cos - (x - cx) * roll_sin;
-                let yaw_offset = rx * (yaw_sin * (0.17 + 0.41 * depth) + nx * (yaw_cos - 1.));
-                let pitch_offset = ry * (pitch_sin * (0.12 + 0.30 * depth) + ny * (pitch_cos - 1.));
-
-                let sx = x + weight * (rotated_x - (x - cx) - yaw_offset);
-                let sy = y_float + weight * (rotated_y - neck_offset - pitch_offset);
-                sample(source, width, height, sx, sy, pixel);
-            }
-        }
-        result
+        let mut head = frame
+            .clone_rect(self.bounds)
+            .expect("raven head within artwork");
+        head.apply_mask(&self.matte);
+        let yaw = pose.yaw.clamp(-1., 1.);
+        let pitch = pose.pitch.clamp(-1., 1.);
+        let roll = pose.roll.clamp(-0.5, 0.5) * 0.28;
+        let transform = Transform::from_scale(1. - 0.08 * yaw.abs(), 1. - 0.04 * pitch.abs())
+            .pre_translate(-187., -168.)
+            .post_rotate(roll.to_degrees() + pitch * 3.)
+            .post_translate(187. + yaw * 10., 168. + pitch * 3.);
+        let mut output = self.plate.clone();
+        output.draw_pixmap(
+            0,
+            0,
+            head.as_ref(),
+            &PixmapPaint {
+                quality: FilterQuality::Bilinear,
+                ..PixmapPaint::default()
+            },
+            transform,
+            None,
+        );
+        output
     }
 }
 
-fn smoothstep(value: f32) -> f32 {
-    let t = value.clamp(0., 1.);
-    t * t * (3. - 2. * t)
+fn raven_ink(pixel: &[u8]) -> f32 {
+    let warmth = f32::from(pixel[0]) - f32::from(pixel[1]);
+    ((84. - warmth) / 28.).clamp(0., 1.)
+}
+
+fn mix(a: u8, b: u8, amount: f32) -> u8 {
+    (f32::from(a) + (f32::from(b) - f32::from(a)) * amount).round() as u8
 }
 
 pub(super) fn sample(source: &[u8], width: usize, height: usize, x: f32, y: f32, pixel: &mut [u8]) {
