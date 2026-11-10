@@ -515,6 +515,12 @@ applied_note = "These hints are applied when you generate captions in the editor
 clear = "Clear"
 count = { one = "{count} item", other = "{count} items" }
 description = "Add names, spellings, domains, and capitalization preferences that caption generation should keep in mind."
+fillers_description = "Words you tend to say out of habit. Captions hide them automatically; the video and audio stay unchanged."
+fillers_note = "Hidden only at the start of a phrase or after a pause. Uses that carry meaning stay, such as \"save first, then export\"."
+fillers_placeholder = "Add filler words, separated by spaces"
+fillers_reset = "Restore defaults"
+fillers_save_failed = "Couldn’t save the filler words. Try again."
+fillers_title = "My filler words"
 placeholder = "Add a term"
 saved = "Saved"
 saving = "Saving..."

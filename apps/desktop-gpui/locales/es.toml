@@ -512,6 +512,12 @@ applied_note = "Estos términos se aplican cuando generas subtítulos en el edit
 clear = "Borrar"
 count = { one = "{count} elemento", many = "{count} de elementos", other = "{count} elementos" }
 description = "Añade nombres, grafías, dominios y preferencias de mayúsculas que la generación de subtítulos debe tener en cuenta."
+fillers_description = "Palabras que dices por costumbre. Los subtítulos las ocultan automáticamente; el vídeo y el audio no cambian."
+fillers_note = "Solo se ocultan al inicio de una frase o tras una pausa. Los usos con significado se conservan."
+fillers_placeholder = "Añade muletillas separadas por espacios"
+fillers_reset = "Restaurar valores predeterminados"
+fillers_save_failed = "No se pudieron guardar las muletillas. Inténtalo de nuevo."
+fillers_title = "Mis muletillas"
 placeholder = "Añadir un término"
 saved = "Guardado"
 saving = "Guardando..."

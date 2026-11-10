@@ -65,6 +65,7 @@ const COMMAND_MARKER: &str = "\u{1}";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PageField {
     Hint,
+    Filler,
     Feedback,
     LicenseKey,
     S3(usize),
@@ -317,6 +318,10 @@ pub(crate) struct PagesState {
     hint_draft: String,
     hint_save: HintSave,
     hint_save_task: Option<gpui::Task<()>>,
+    fillers: Vec<String>,
+    filler_input: Entity<ui::TextInputState>,
+    filler_draft: String,
+    filler_save_failed: bool,
     pub(crate) ai: crate::settings_ai::AiState,
     pub(crate) stock: crate::settings_stock::StockSettings,
     pub(crate) cover: crate::settings_cover::CoverSettings,
@@ -379,6 +384,7 @@ pub(crate) struct PagesState {
 impl PagesState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Self {
         let hint_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        let filler_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
         let feedback_input = cx.new(|cx| ui::TextInputState::multi_line(window, cx));
         let license_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
         let s3_inputs = std::array::from_fn(|index| {
@@ -393,6 +399,9 @@ impl PagesState {
         let mut subscriptions = vec![
             cx.subscribe(&hint_input, |this, input, event, cx| {
                 this.page_field_event(PageField::Hint, input, event, cx)
+            }),
+            cx.subscribe(&filler_input, |this, input, event, cx| {
+                this.page_field_event(PageField::Filler, input, event, cx)
             }),
             cx.subscribe(&feedback_input, |this, input, event, cx| {
                 this.page_field_event(PageField::Feedback, input, event, cx)
@@ -431,6 +440,10 @@ impl PagesState {
             hint_draft: String::new(),
             hint_save: HintSave::Idle,
             hint_save_task: None,
+            fillers: store::caption_fillers(),
+            filler_input,
+            filler_draft: String::new(),
+            filler_save_failed: false,
             ai: crate::settings_ai::AiState::new(window, cx),
             stock: crate::settings_stock::StockSettings::new(window, cx),
             cover: crate::settings_cover::CoverSettings::new(window, cx),
@@ -514,6 +527,11 @@ impl SettingsWindow {
                 self.pages.hint_save_task = None;
                 let input = self.pages.hint_input.clone();
                 input.update(cx, |input, cx| input.set_text("", cx));
+                self.pages.fillers = store::caption_fillers();
+                self.pages.filler_save_failed = false;
+                self.pages.filler_draft.clear();
+                let input = self.pages.filler_input.clone();
+                input.update(cx, |input, cx| input.set_text("", cx));
                 self.ai_page_shown(window, cx);
                 self.detect_and_connect_agents(window, cx);
             }
@@ -562,6 +580,7 @@ impl SettingsWindow {
                 let value = input.read(cx).text().to_string();
                 match field {
                     PageField::Hint => self.pages.hint_draft = value,
+                    PageField::Filler => self.pages.filler_draft = value,
                     PageField::Feedback => self.pages.feedback_draft = value,
                     PageField::LicenseKey => self.pages.license_draft = value,
                     PageField::S3(index) => self.pages.s3.drafts[index] = value,
@@ -571,6 +590,9 @@ impl SettingsWindow {
             // `onKeyDown` in transcription.tsx: Enter adds the pending term.
             ui::TextInputEvent::Confirmed if field == PageField::Hint => {
                 self.transcription_add_hint(cx);
+            }
+            ui::TextInputEvent::Confirmed if field == PageField::Filler => {
+                self.fillers_add(cx);
             }
             _ => {}
         }
@@ -2496,6 +2518,147 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    fn fillers_add(&mut self, cx: &mut Context<Self>) {
+        let mut next = self.pages.fillers.clone();
+        next.extend(
+            self.pages
+                .filler_draft
+                .split([' ', ',', '，', '、'])
+                .map(str::to_string),
+        );
+        if self.fillers_persist(next, cx) {
+            let input = self.pages.filler_input.clone();
+            input.update(cx, |input, cx| input.set_text("", cx));
+            self.pages.filler_draft.clear();
+        }
+    }
+
+    fn fillers_persist(&mut self, fillers: Vec<String>, cx: &mut Context<Self>) -> bool {
+        let fillers = store::normalize_transcription_hints(fillers);
+        let saved = fillers == self.pages.fillers
+            || store::set_store_setting(
+                GENERAL_SETTINGS,
+                "captionFillers",
+                Value::Array(fillers.iter().cloned().map(Value::String).collect()),
+            );
+        self.pages.filler_save_failed = !saved;
+        if saved {
+            self.pages.fillers = fillers;
+        }
+        cx.notify();
+        saved
+    }
+
+    fn render_fillers(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        self.pages.filler_input.update(cx, |input, _| {
+            input.set_placeholder(tr::settings::transcription::fillers_placeholder())
+        });
+        let fillers = self.pages.fillers.clone();
+        let is_default = fillers
+            .iter()
+            .map(String::as_str)
+            .eq(store::DEFAULT_CAPTION_FILLERS.iter().copied());
+        let input_row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.pages_input("filler-input", &self.pages.filler_input)),
+            )
+            .child(self.button(
+                "fillers-add",
+                (ui::ButtonVariant::Primary, Some("icons/plus.svg")),
+                tr::common::add(),
+                self.pages.filler_draft.trim().is_empty(),
+                cx,
+                |this, _window, cx| this.fillers_add(cx),
+            ));
+        let chips = div().flex().flex_row().flex_wrap().gap(px(8.)).children(
+            fillers.into_iter().enumerate().map(|(index, filler)| {
+                let remove = filler.clone();
+                div()
+                    .id(("filler-chip", index))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.))
+                    .px(px(10.))
+                    .py(px(4.))
+                    .rounded_full()
+                    .bg(theme.settings_fill())
+                    .border_1()
+                    .border_color(theme.settings_border())
+                    .text_size(px(12.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.settings_selection()))
+                    .child(filler)
+                    .child(
+                        svg()
+                            .path("icons/x.svg")
+                            .size(px(12.))
+                            .text_color(theme.settings_muted()),
+                    )
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        let mut next = this.pages.fillers.clone();
+                        next.retain(|existing| *existing != remove);
+                        this.fillers_persist(next, cx);
+                    }))
+            }),
+        );
+        let reset = (!is_default).then(|| {
+            self.button(
+                "fillers-reset",
+                (ui::ButtonVariant::Gray, None),
+                tr::settings::transcription::fillers_reset(),
+                false,
+                cx,
+                |this, _window, cx| {
+                    this.fillers_persist(
+                        store::DEFAULT_CAPTION_FILLERS
+                            .iter()
+                            .map(|filler| (*filler).to_string())
+                            .collect(),
+                        cx,
+                    );
+                },
+            )
+        });
+        let card = self
+            .card(true)
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(chips)
+            .child(input_row)
+            .when(self.pages.filler_save_failed, |card| {
+                card.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.red_11))
+                        .child(tr::settings::transcription::fillers_save_failed()),
+                )
+            })
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(theme.settings_muted())
+                    .child(tr::settings::transcription::fillers_note()),
+            );
+        self.section(
+            tr::settings::transcription::fillers_title(),
+            Some(tr::settings::transcription::fillers_description()),
+            reset.map(IntoElement::into_any_element),
+            vec![card.into_any_element()],
+        )
+        .into_any_element()
+    }
+
     fn transcription_remove_hint(&mut self, hint: String, cx: &mut Context<Self>) {
         self.pages.hints.retain(|existing| *existing != hint);
         let next = self.pages.hints.clone();
@@ -2664,6 +2827,7 @@ impl SettingsWindow {
             );
         }
 
+        sections.push(self.render_fillers(cx));
         sections
     }
 }

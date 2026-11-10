@@ -512,6 +512,12 @@ applied_note = "Diese Hinweise werden angewendet, wenn Sie im Editor Untertitel 
 clear = "Leeren"
 count = { one = "{count} Eintrag", other = "{count} Einträge" }
 description = "Fügen Sie Namen, Schreibweisen, Domains und Vorgaben zur Groß- und Kleinschreibung hinzu, die bei der Untertitelerstellung berücksichtigt werden sollen."
+fillers_description = "Wörter, die Sie aus Gewohnheit sagen. Untertitel blenden sie automatisch aus; Video und Ton bleiben unverändert."
+fillers_note = "Nur am Satzanfang oder nach einer Pause ausgeblendet. Bedeutungstragende Verwendungen bleiben erhalten."
+fillers_placeholder = "Füllwörter hinzufügen, durch Leerzeichen getrennt"
+fillers_reset = "Standard wiederherstellen"
+fillers_save_failed = "Die Füllwörter konnten nicht gespeichert werden. Bitte erneut versuchen."
+fillers_title = "Meine Füllwörter"
 placeholder = "Begriff hinzufügen"
 saved = "Gespeichert"
 saving = "Wird gespeichert..."
