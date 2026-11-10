@@ -26,6 +26,26 @@ const FFMPEG_CARGO_ENV = `[env]
 FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
 `;
 
+const FFMPEG_LINK_LIBRARIES = [
+	"avcodec",
+	"avdevice",
+	"avfilter",
+	"avformat",
+	"avutil",
+	"swresample",
+	"swscale",
+];
+
+async function missingFfmpegLibraries(dir, prefix, extension) {
+	const names = FFMPEG_LINK_LIBRARIES.map(
+		(name) => `${prefix}${name}.${extension}`,
+	);
+	const exists = await Promise.all(
+		names.map((name) => fileExists(path.join(dir, name))),
+	);
+	return names.filter((_, index) => !exists[index]);
+}
+
 function cargoConfigPath(value) {
 	return value.replaceAll("\\", "/");
 }
@@ -152,7 +172,11 @@ async function main() {
 		} else console.log(`Using cached ${ffmpegZip}`);
 
 		const ffmpegDir = path.join(targetDir, "ffmpeg");
-		if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
+		const ffmpegLibDir = path.join(ffmpegDir, "lib");
+		if (
+			downloadedFfmpeg ||
+			(await missingFfmpegLibraries(ffmpegLibDir, "", "lib")).length > 0
+		) {
 			await exec(
 				`Expand-Archive -Path "${ffmpegZipPath}" -DestinationPath "${targetDir}" -Force`,
 				{ shell: "powershell.exe" },
@@ -192,6 +216,15 @@ async function main() {
 				force: true,
 			},
 		);
+		const missingLinkLibraries = await missingFfmpegLibraries(
+			path.join(targetDir, "native-deps", "lib"),
+			"",
+			"lib",
+		);
+		if (missingLinkLibraries.length > 0)
+			throw new Error(
+				`Missing FFmpeg import libraries: ${missingLinkLibraries.join(", ")}`,
+			);
 		console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
 
 		await setupWindowsDxc();
@@ -291,7 +324,10 @@ async function main() {
 
 			const nativeDepsDir = path.join(targetDir, "native-deps");
 			const nativeLibDir = path.join(nativeDepsDir, "lib");
-			if (downloadedNativeDeps || !(await fileExists(nativeLibDir))) {
+			if (
+				downloadedNativeDeps ||
+				(await missingFfmpegLibraries(nativeLibDir, "lib", "so")).length > 0
+			) {
 				await fs
 					.rm(nativeDepsDir, { recursive: true, force: true })
 					.catch(() => {});
@@ -300,6 +336,15 @@ async function main() {
 				console.log("Extracted native-deps");
 			} else console.log("Using cached native-deps");
 
+			const missingLinkLibraries = await missingFfmpegLibraries(
+				nativeLibDir,
+				"lib",
+				"so",
+			);
+			if (missingLinkLibraries.length > 0)
+				throw new Error(
+					`Missing FFmpeg link libraries: ${missingLinkLibraries.join(", ")}`,
+				);
 			const onnxRuntimePath = await setupLinuxOnnxRuntime();
 			const debLibDir = path.join(nativeDepsDir, "cap-deb-libs");
 			await fs.rm(debLibDir, { recursive: true, force: true }).catch(() => {});

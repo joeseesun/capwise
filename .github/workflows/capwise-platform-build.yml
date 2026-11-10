@@ -60,12 +60,11 @@ jobs:
         with:
           bun-version: 1.4.4
 
-      - name: Prepare GPUI and native dependencies
+      - name: Prepare GPUI and Rust toolchain
         shell: bash
         run: |
           scripts/prepare-gpui-dependency.sh
           if [[ "$RUNNER_OS" != "macOS" ]]; then node scripts/sync-desktop-versions.mjs; fi
-          node scripts/setup.js
           rustup toolchain install 1.95.0 --profile minimal
 
       - name: Install desktop bundler
@@ -83,6 +82,10 @@ jobs:
           workspaces: |
             . -> target
             apps/desktop-gpui -> target
+
+      - name: Prepare native dependencies after restoring the Rust cache
+        shell: bash
+        run: node scripts/setup.js
 
       - name: Package Intel Mac candidate
         if: runner.os == 'macOS'
