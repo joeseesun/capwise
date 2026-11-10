@@ -2965,6 +2965,33 @@ impl SplitPaneLayout {
         let zoom = lerp_f32(1.0, self.zoom, t);
         fit_crop_to_target(self.src_origin, self.src_size, aspect, focal, zoom)
     }
+
+    fn screen_crop_for(&self, target: [f32; 4], t: f32, zoom: &InterpolatedZoom) -> [f32; 4] {
+        let crop = self.crop_for(target, t);
+        let extra_zoom = zoom.display_amount() - 1.0;
+        if extra_zoom <= f64::EPSILON {
+            return crop;
+        }
+
+        // The unsplit part of the morph is already zoomed in target space.
+        // Transfer only the split pane's share of the zoom to its source crop.
+        let pane_width = self.target[2] - self.target[0];
+        let target_width = (target[2] - target[0]).max(f32::EPSILON);
+        let crop_zoom = 1.0 + extra_zoom as f32 * (t * pane_width / target_width);
+        let travel = (zoom.bounds.top_left * (-1.0 / extra_zoom)).map(|value| value as f32);
+        let focus_weight = t * zoom.t as f32;
+        let axis_crop = |axis: usize, focus: f32| {
+            let extent = (crop[axis + 2] - crop[axis]) / crop_zoom;
+            let centered = (crop[axis] + crop[axis + 2] - extent) * 0.5;
+            let focused =
+                self.src_origin[axis] + focus.clamp(0.0, 1.0) * (self.src_size[axis] - extent);
+            let start = lerp_f32(centered, focused, focus_weight);
+            (start, start + extent)
+        };
+        let (left, right) = axis_crop(0, travel.x);
+        let (top, bottom) = axis_crop(1, travel.y);
+        [left, top, right, bottom]
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4777,7 +4804,8 @@ impl ProjectUniforms {
             // aspect always equals target aspect during the morph — a linear
             // crop lerp would distort the image mid-transition.
             let final_crop_bounds = split_layout.as_ref().map_or(base_crop_bounds, |s| {
-                s.screen.crop_for(final_target_bounds, split_t)
+                s.screen
+                    .screen_crop_for(final_target_bounds, split_t, &zoom)
             });
 
             // Text takeover composes after the split morph at the same seam:
@@ -10191,6 +10219,89 @@ mod project_uniforms_tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn split_screen_applies_timeline_zoom_inside_the_screen_pane() {
+        let mut constants = cursor_test_constants().await;
+        let size = constants.options.screen_size;
+        constants.options.camera_size = Some(size);
+        let events = CursorEvents {
+            moves: vec![cursor_move(0.0, 0.85, 0.5)],
+            clicks: vec![],
+        };
+        let frames = DecodedSegmentFrames {
+            screen_size: size,
+            screen_frame: None,
+            camera_frame: None,
+            segment_time: 2.0,
+            recording_time: 2.0,
+            segment_has_camera: true,
+        };
+        for (mode, fit_screen) in [("splitScreen", false), ("floating", true)] {
+            for camera_first in [false, true] {
+                let mut project = ProjectConfiguration::default();
+                project.timeline = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0 }],
+                        "zoomSegments": [],
+                        "sceneSegments": [{
+                            "start": 0.0, "end": 4.0, "mode": mode,
+                            "splitLayout": { "cameraFirst": camera_first, "fitScreen": fit_screen },
+                            "transitionIn": 0.0, "transitionOut": 0.0
+                        }]
+                    }))
+                    .unwrap(),
+                );
+                let at = |project: &ProjectConfiguration| {
+                    let mut zoom = ZoomTransformTimeline::from_project(project, &events, 4.0, size);
+                    zoom.ensure_precomputed_until(2.0);
+                    ProjectUniforms::new(
+                        &constants,
+                        &Arc::new(project.clone()),
+                        120,
+                        60,
+                        size,
+                        &events,
+                        &frames,
+                        4.0,
+                        &zoom,
+                    )
+                };
+                let before = at(&project);
+                project.timeline.as_mut().unwrap().zoom_segments.push(
+                    serde_json::from_value(serde_json::json!({
+                        "start": 0.0, "end": 4.0, "amount": 1.5,
+                        "mode": "auto", "instantAnimation": true
+                    }))
+                    .unwrap(),
+                );
+                let zoomed = at(&project);
+                assert!(zoomed.split.is_some());
+                let same_bounds = |a: [f32; 4], b: [f32; 4]| {
+                    a.into_iter().zip(b).all(|(a, b)| (a - b).abs() < 0.01)
+                };
+                assert!(same_bounds(
+                    zoomed.display.target_bounds,
+                    before.display.target_bounds
+                ));
+                let camera = zoomed.camera.unwrap();
+                let before_camera = before.camera.unwrap();
+                assert!(same_bounds(
+                    camera.target_bounds,
+                    before_camera.target_bounds
+                ));
+                assert!(same_bounds(camera.crop_bounds, before_camera.crop_bounds));
+                let [x0, y0, x1, y1] = zoomed.display.crop_bounds;
+                let [base_x0, base_y0, base_x1, base_y1] = before.display.crop_bounds;
+                assert!(((base_x1 - base_x0) / (x1 - x0) - 1.5).abs() < 0.01);
+                assert!(((base_y1 - base_y0) / (y1 - y0) - 1.5).abs() < 0.01);
+                let cursor = zoomed.display.source_uv_to_target(XY::new(0.85, 0.5));
+                let [left, top, right, bottom] = zoomed.display.target_bounds.map(f64::from);
+                assert!((left..right).contains(&cursor.x));
+                assert!((top..bottom).contains(&cursor.y));
+            }
+        }
     }
 
     #[tokio::test]
