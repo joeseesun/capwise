@@ -469,6 +469,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::transcription::fillers_reset(),
             "Restore defaults",
         ),
+        (
+            tr::settings::transcription::fillers_save_failed(),
+            "Couldn’t save the filler words. Try again.",
+        ),
         (tr::settings::transcription::clear(), "Clear"),
         (tr::settings::transcription::saving(), "Saving..."),
         (tr::settings::transcription::saved(), "Saved"),
