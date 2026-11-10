@@ -449,6 +449,30 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::transcription::terms_description(),
             "Add one term at a time to reduce typos and formatting mistakes.",
         ),
+        (
+            tr::settings::transcription::fillers_title(),
+            "My filler words",
+        ),
+        (
+            tr::settings::transcription::fillers_description(),
+            "Words you tend to say out of habit. Captions hide them automatically; the video and audio stay unchanged.",
+        ),
+        (
+            tr::settings::transcription::fillers_note(),
+            "Hidden only at the start of a phrase or after a pause. Uses that carry meaning stay, such as \"save first, then export\".",
+        ),
+        (
+            tr::settings::transcription::fillers_placeholder(),
+            "Add filler words, separated by spaces",
+        ),
+        (
+            tr::settings::transcription::fillers_reset(),
+            "Restore defaults",
+        ),
+        (
+            tr::settings::transcription::fillers_save_failed(),
+            "Couldn’t save the filler words. Try again.",
+        ),
         (tr::settings::transcription::clear(), "Clear"),
         (tr::settings::transcription::saving(), "Saving..."),
         (tr::settings::transcription::saved(), "Saved"),

@@ -66,6 +66,12 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::camera::avatar::cat(), "Cat"),
         (tr::camera::avatar::bear(), "Bear"),
         (tr::camera::avatar::fox(), "Fox"),
+        (tr::camera::avatar::raven(), "Raven"),
+        (tr::camera::avatar::retro_robot(), "Retro Robot"),
+        (
+            tr::camera::avatar::silver_presenter(),
+            "Silver-haired Presenter",
+        ),
         (tr::main::device::fallback_camera(), "Camera"),
         (tr::main::mode::name::instant(), "Instant"),
         (tr::main::mode::name::studio(), "Studio"),

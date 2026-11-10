@@ -829,6 +829,13 @@ impl Feeds {
         self.camera_preview_not_before = Some(cap_timestamp::Timestamps::now());
         cx.notify();
     }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_avatar_split(&mut self, split: bool) {
+        if self.avatar.set_split(split) {
+            self.camera_preview_not_before = Some(cap_timestamp::Timestamps::now());
+        }
+    }
+
     pub fn camera_input_pending(&self) -> bool {
         self.camera_input_pending
     }

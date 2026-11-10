@@ -12,14 +12,14 @@ impl Portrait {
         }
     }
 
-    fn shape(&mut self, path: tiny_skia::Path, color: u32, transform: Transform) {
+    pub(super) fn shape(&mut self, path: tiny_skia::Path, color: u32, transform: Transform) {
         let mut paint = Paint::default();
         paint.set_color_rgba8((color >> 16) as u8, (color >> 8) as u8, color as u8, 255);
         self.pixels
             .fill_path(&path, &paint, FillRule::Winding, transform, None);
     }
 
-    fn oval(&mut self, bounds: [f32; 4], color: u32, transform: Transform) {
+    pub(super) fn oval(&mut self, bounds: [f32; 4], color: u32, transform: Transform) {
         if let Some(rect) = tiny_skia::Rect::from_xywh(bounds[0], bounds[1], bounds[2], bounds[3])
             && let Some(path) = PathBuilder::from_oval(rect)
         {
@@ -27,7 +27,7 @@ impl Portrait {
         }
     }
 
-    fn curve(&mut self, points: [f32; 6], color: u32, width: f32, transform: Transform) {
+    pub(super) fn curve(&mut self, points: [f32; 6], color: u32, width: f32, transform: Transform) {
         let mut path = PathBuilder::new();
         path.move_to(points[0], points[1]);
         path.quad_to(points[2], points[3], points[4], points[5]);
@@ -59,7 +59,14 @@ impl Portrait {
         }
     }
 
-    pub fn draw(&mut self, kind: AvatarKind, pose: Pose, elapsed: f32) {
+    pub fn draw(&mut self, kind: AvatarKind, pose: Pose, elapsed: f32, split: bool) {
+        if super::illustrated::draw(&mut self.pixels, kind, pose, split) {
+            return;
+        }
+        if kind == AvatarKind::Cat {
+            self.draw_cat(pose, elapsed, split);
+            return;
+        }
         let (fur, dark, background, shirt) = match kind {
             AvatarKind::Bear => (0xb58c69, 0x77543c, 0xe8e3d9, 0x546f73),
             AvatarKind::Fox => (0xd58c50, 0x955733, 0xe9e1d5, 0x59637d),
@@ -74,7 +81,30 @@ impl Portrait {
         let still = Transform::identity();
         self.oval([76., 540., 488., 80.], 0xd0d8d1, still);
         let breath = elapsed.mul_add(1.8, 0.).sin() * 2.;
-        self.oval([175., 426. + breath, 290., 260.], shirt, still);
+        if split {
+            let torso = Transform::from_translate(0., breath);
+            self.oval([152., 566., 49., 55.], fur, torso);
+            self.oval([439., 566., 49., 55.], fur, torso);
+            let mut shirt_outline = PathBuilder::new();
+            shirt_outline.move_to(320., 426.);
+            shirt_outline.cubic_to(433., 426., 495., 478., 490., 550.);
+            shirt_outline.quad_to(488., 580., 472., 598.);
+            shirt_outline.quad_to(457., 604., 445., 598.);
+            shirt_outline.quad_to(432., 630., 420., 659.);
+            shirt_outline.line_to(220., 659.);
+            shirt_outline.quad_to(208., 630., 195., 598.);
+            shirt_outline.quad_to(183., 604., 168., 598.);
+            shirt_outline.quad_to(152., 580., 150., 550.);
+            shirt_outline.cubic_to(145., 478., 207., 426., 320., 426.);
+            shirt_outline.close();
+            self.shape(
+                shirt_outline.finish().expect("valid shirt outline"),
+                shirt,
+                torso,
+            );
+        } else {
+            self.oval([175., 426. + breath, 290., 260.], shirt, still);
+        }
         self.curve(
             [
                 286.,
@@ -90,8 +120,17 @@ impl Portrait {
         );
         self.oval([300., 516. + breath, 40., 40.], 0xf6eee0, still);
         self.oval([315., 527. + breath, 10., 16.], shirt, still);
-        let head = Transform::from_rotate_at(pose.roll.to_degrees(), 320., 340.)
-            .post_translate(pose.yaw * 18., pose.pitch * 12. + breath);
+        let yaw = pose.yaw * 0.38;
+        let pitch = pose.pitch * 0.30;
+        let head = Transform::from_scale(yaw.cos(), pitch.cos())
+            .pre_translate(-320., -460.)
+            .post_translate(320., 460.)
+            .post_concat(Transform::from_rotate_at(
+                pose.roll.to_degrees() * 0.65,
+                320.,
+                460.,
+            ))
+            .post_translate(yaw.sin() * 22., pitch.sin() * 17. + breath);
         if kind == AvatarKind::Bear {
             self.oval([165., 170., 104., 110.], fur, head);
             self.oval([371., 170., 104., 110.], fur, head);
@@ -118,10 +157,15 @@ impl Portrait {
         self.oval([174., 205., 292., 280.], dark, head);
         self.oval([176., 199., 288., 274.], fur, head);
         self.oval([205., 345., 230., 112.], 0xf6eee0, head);
-        let face = Transform::from_translate(pose.yaw * 27., pose.pitch * 13.).post_concat(head);
-        for (x, eye) in [(258., pose.left_eye), (382., pose.right_eye)] {
-            let height = 5. + eye * 35.;
-            self.oval([x - 14., 311. - height / 2., 28., height], 0x293638, face);
+        let face = Transform::from_translate(yaw.sin() * 63., pitch.sin() * 44.).post_concat(head);
+        for (x, eye, side) in [(258., pose.left_eye, -1.), (382., pose.right_eye, 1.)] {
+            let height = 4. + eye * 36.;
+            let width = 28. * (1. + side * yaw.sin() * 0.30);
+            self.oval(
+                [x - width / 2., 311. - height / 2., width, height],
+                0x293638,
+                face,
+            );
             if eye > 0.4 {
                 self.oval([x - 7., 299., 7., 9.], 0xffffff, face);
             }
@@ -135,35 +179,24 @@ impl Portrait {
         self.oval([220., 346., 32., 14.], 0xdcae9b, face);
         self.oval([390., 346., 32., 14.], 0xdcae9b, face);
         self.oval([306., 347., 28., 18.], 0x293638, face);
-        if pose.mouth > 0.08 {
+        let mouth_width = 50. * (1. + pose.mouth_width * 0.34);
+        let mouth_height = 4. + pose.mouth * 39.;
+        self.oval(
+            [320. - mouth_width * 0.5, 384., mouth_width, mouth_height],
+            0x463139,
+            face,
+        );
+        if mouth_height > 12. {
             self.oval(
                 [
-                    297. - pose.smile * 5.,
-                    381.,
-                    46. + pose.smile * 10.,
-                    9. + pose.mouth * 43.,
+                    320. - mouth_width * 0.24,
+                    384. + mouth_height * 0.62,
+                    mouth_width * 0.48,
+                    mouth_height * 0.25,
                 ],
-                0x463139,
-                face,
-            );
-            self.oval(
-                [307., 390. + pose.mouth * 22., 26., 6. + pose.mouth * 12.],
                 0xd99596,
                 face,
             );
-        } else {
-            self.curve(
-                [291., 385., 320., 402. + pose.smile * 7., 349., 385.],
-                0x463139,
-                5.,
-                face,
-            );
-        }
-        if kind == AvatarKind::Cat {
-            for (x, dx) in [(239., -55.), (401., 55.)] {
-                self.curve([x, 373., x + dx * 0.5, 367., x + dx, 365.], dark, 3., head);
-                self.curve([x, 386., x + dx * 0.5, 390., x + dx, 398.], dark, 3., head);
-            }
         }
     }
 }
@@ -175,19 +208,19 @@ mod tests {
     #[test]
     fn characters_and_expressions_produce_distinct_opaque_frames() {
         let mut portrait = Portrait::new();
-        portrait.draw(AvatarKind::Cat, Pose::default(), 0.);
+        portrait.draw(AvatarKind::Cat, Pose::default(), 0., false);
         let cat = portrait.pixels.data().to_vec();
         assert!(cat.chunks_exact(4).all(|pixel| pixel[3] == 255));
         if let Ok(directory) = std::env::var("CAP_AVATAR_TEST_PORTRAITS") {
             for kind in [AvatarKind::Cat, AvatarKind::Bear, AvatarKind::Fox] {
-                portrait.draw(kind, Pose::default(), 0.);
+                portrait.draw(kind, Pose::default(), 0., false);
                 portrait
                     .pixels
                     .save_png(std::path::Path::new(&directory).join(format!("{kind:?}.png")))
                     .unwrap();
             }
         }
-        portrait.draw(AvatarKind::Bear, Pose::default(), 0.);
+        portrait.draw(AvatarKind::Bear, Pose::default(), 0., false);
         assert_ne!(cat, portrait.pixels.data());
         portrait.draw(
             AvatarKind::Cat,
@@ -198,6 +231,7 @@ mod tests {
                 ..Pose::default()
             },
             0.,
+            false,
         );
         assert_ne!(cat, portrait.pixels.data());
     }

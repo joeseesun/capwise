@@ -407,6 +407,7 @@ fn prepare(
                 captions.settings.enabled = *visible;
             }
             Operation::CaptionWords { changes } => {
+                let fillers = crate::store::caption_fillers();
                 let captions = next
                     .captions
                     .as_mut()
@@ -431,7 +432,11 @@ fn prepare(
                         || word.hidden
                         || (change.hidden
                             && (change.after != change.before
-                                || !crate::caption_review::safe_to_hide(segment, change.index)))
+                                || !crate::caption_review::safe_to_hide(
+                                    segment,
+                                    change.index,
+                                    &fillers,
+                                )))
                     {
                         return Err(invalid());
                     }
@@ -640,6 +645,7 @@ fn context(project: &ProjectConfiguration) -> serde_json::Value {
         .captions
         .as_ref()
         .is_some_and(|captions| captions.source_timed);
+    let fillers = crate::store::caption_fillers();
     let source_sample: Vec<_> = sources
         .iter()
         .take(80)
@@ -649,7 +655,7 @@ fn context(project: &ProjectConfiguration) -> serde_json::Value {
                 "id":s.id,"text":s.text,"editable":editable,
                 "words":s.words.iter().enumerate().map(|(index,w)| serde_json::json!({
                     "index":index,"text":w.text,"hidden":w.hidden,
-                    "can_hide":editable && !w.hidden && crate::caption_review::safe_to_hide(s,index)
+                    "can_hide":editable && !w.hidden && crate::caption_review::safe_to_hide(s,index,&fillers)
                 })).collect::<Vec<_>>()
             })
         })
@@ -3148,8 +3154,7 @@ mod tests {
             .collect::<Vec<_>>();
         let (plan, candidate) =
             validated_plan(&project, &durations, &payload, |payload| async move {
-                llm::chat_json(uuid::Uuid::new_v4(), provider.id, None, CONTRACT, &payload)
-                    .await
+                llm::chat_json(uuid::Uuid::new_v4(), provider.id, None, CONTRACT, &payload).await
             })
             .await
             .expect("Model plan must pass validation");

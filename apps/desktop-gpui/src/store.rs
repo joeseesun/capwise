@@ -1783,6 +1783,20 @@ pub fn transcription_hints() -> Vec<String> {
     }
 }
 
+pub const DEFAULT_CAPTION_FILLERS: &[&str] = &["呃", "额", "嗯", "啊", "然后"];
+
+pub fn caption_fillers() -> Vec<String> {
+    match store_section(GENERAL_SETTINGS).get("captionFillers") {
+        Some(Value::Array(entries)) => {
+            normalize_transcription_hints(entries.iter().filter_map(Value::as_str))
+        }
+        _ => DEFAULT_CAPTION_FILLERS
+            .iter()
+            .map(|filler| (*filler).to_string())
+            .collect(),
+    }
+}
+
 // -- The auth section -----------------------------------------------------------
 
 /// What the settings pages need from `AuthStore` (`src-tauri/src/auth.rs`):
