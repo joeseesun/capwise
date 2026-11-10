@@ -812,6 +812,10 @@ impl RecordingSession {
         self.stopped_for_low_storage = false;
         self.stopped_elapsed = None;
         self.last_config = Some(config.clone());
+        #[cfg(target_os = "macos")]
+        crate::feeds::Feeds::global(cx).update(cx, |feeds, _| {
+            feeds.set_avatar_split(self.live_camera_layout().is_some());
+        });
         // `Some(0)` keeps the controls in their pre-start state while the cue plays.
         self.countdown_remaining = Some(countdown);
         cx.notify();

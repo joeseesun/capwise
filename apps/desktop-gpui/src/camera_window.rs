@@ -2638,6 +2638,7 @@ impl CameraWindow {
             None
         };
 
+        Feeds::global(cx).update(cx, |feeds, _| feeds.set_avatar_split(preview.is_some()));
         let next = preview.and_then(|(layout, display)| {
             let area = display
                 .as_ref()
@@ -2836,18 +2837,44 @@ impl CameraWindow {
             )
     }
 
+    fn avatar_choices(&self) -> [cap_recording::avatar::AvatarKind; 8] {
+        use cap_recording::avatar::AvatarKind;
+        let legacy = match self.avatar {
+            AvatarKind::Bear | AvatarKind::Fox => self.avatar,
+            _ => AvatarKind::Cat,
+        };
+        [
+            AvatarKind::Camera,
+            AvatarKind::RetroRobot,
+            AvatarKind::BlueJacketPresenter,
+            AvatarKind::SilverPresenter,
+            AvatarKind::CurlyPresenter,
+            AvatarKind::BlackSuitPresenter,
+            AvatarKind::Raven,
+            legacy,
+        ]
+    }
+
     fn avatar_items(&self) -> Vec<ui::MenuItem> {
         use cap_recording::avatar::AvatarKind;
-        [
-            tr::camera::avatar::camera(),
-            tr::camera::avatar::cat(),
-            tr::camera::avatar::bear(),
-            tr::camera::avatar::fox(),
-        ]
-        .into_iter()
-        .zip(AvatarKind::ALL)
-        .map(|(label, kind)| ui::MenuItem::new(label, self.avatar == kind))
-        .collect()
+        self.avatar_choices()
+            .into_iter()
+            .map(|kind| {
+                let label = match kind {
+                    AvatarKind::Camera => tr::camera::avatar::camera(),
+                    AvatarKind::Cat => tr::camera::avatar::cat(),
+                    AvatarKind::Bear => tr::camera::avatar::bear(),
+                    AvatarKind::Fox => tr::camera::avatar::fox(),
+                    AvatarKind::Raven => tr::camera::avatar::raven(),
+                    AvatarKind::RetroRobot => tr::camera::avatar::retro_robot(),
+                    AvatarKind::SilverPresenter => tr::camera::avatar::silver_presenter(),
+                    AvatarKind::CurlyPresenter => tr::camera::avatar::curly_presenter(),
+                    AvatarKind::BlackSuitPresenter => tr::camera::avatar::black_suit_presenter(),
+                    AvatarKind::BlueJacketPresenter => tr::camera::avatar::blue_jacket_presenter(),
+                };
+                ui::MenuItem::new(label, self.avatar == kind)
+            })
+            .collect()
     }
 
     fn choose_avatar(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -2858,8 +2885,11 @@ impl CameraWindow {
             cx.notify();
             return;
         }
-        if let Some(kind) = cap_recording::avatar::AvatarKind::ALL.get(index).copied() {
+        if let Some(kind) = self.avatar_choices().get(index).copied() {
             self.avatar = kind;
+            if kind.uses_illustration() && self.state.shape != CameraShape::Round {
+                self.mutate_state(window, cx, |state| state.shape = CameraShape::Round);
+            }
             clear_parked_camera_preview(cx);
             #[cfg(target_os = "macos")]
             {

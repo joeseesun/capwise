@@ -13,6 +13,7 @@ unsafe extern "C" {
 struct Job {
     frame: NativeCameraFrame,
     kind: AvatarKind,
+    split: bool,
 }
 
 pub(crate) struct AvatarWorker {
@@ -45,8 +46,9 @@ impl AvatarWorker {
         &self,
         frame: NativeCameraFrame,
         kind: AvatarKind,
+        split: bool,
     ) -> anyhow::Result<NativeCameraFrame> {
-        self.input.send_async(Job { frame, kind }).await?;
+        self.input.send_async(Job { frame, kind, split }).await?;
         self.output.recv_async().await?
     }
 }
@@ -193,7 +195,7 @@ impl Renderer {
             };
         }
         self.pose.approach(self.target, 0.4);
-        self.portrait.draw(job.kind, self.pose, elapsed);
+        self.portrait.draw(job.kind, self.pose, elapsed, job.split);
         let width = input.width();
         let height = input.height();
         let small_width = (640. * width as f32 / height as f32)
@@ -321,8 +323,11 @@ mod tests {
             timestamp: cap_timestamp::Timestamp::Instant(Instant::now()),
         };
         let worker = AvatarWorker::new().unwrap();
-        for kind in [AvatarKind::Cat, AvatarKind::Bear, AvatarKind::Fox] {
-            let result = worker.render(frame.clone(), kind).await.unwrap();
+        for kind in AvatarKind::ALL.into_iter().skip(1) {
+            let result = worker
+                .render(frame.clone(), kind, kind.uses_illustration())
+                .await
+                .unwrap();
             assert_eq!(result.sample_buf.pts(), frame.sample_buf.pts());
             assert_eq!(result.sample_buf.image_buf().unwrap().width(), 640);
             assert_eq!(result.sample_buf.image_buf().unwrap().height(), 360);

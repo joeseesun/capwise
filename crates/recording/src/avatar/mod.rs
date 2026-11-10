@@ -6,6 +6,8 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::AvatarWorker;
 #[cfg(any(target_os = "macos", test))]
+mod illustrated;
+#[cfg(any(target_os = "macos", test))]
 mod paint;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,16 +19,49 @@ pub enum AvatarKind {
     Cat = 1,
     Bear = 2,
     Fox = 3,
+    Raven = 4,
+    RetroRobot = 5,
+    SilverPresenter = 6,
+    CurlyPresenter = 7,
+    BlackSuitPresenter = 8,
+    BlueJacketPresenter = 9,
 }
 
 impl AvatarKind {
-    pub const ALL: [Self; 4] = [Self::Camera, Self::Cat, Self::Bear, Self::Fox];
+    pub const ALL: [Self; 10] = [
+        Self::Camera,
+        Self::Cat,
+        Self::Bear,
+        Self::Fox,
+        Self::Raven,
+        Self::RetroRobot,
+        Self::SilverPresenter,
+        Self::CurlyPresenter,
+        Self::BlackSuitPresenter,
+        Self::BlueJacketPresenter,
+    ];
+
+    pub fn uses_illustration(self) -> bool {
+        matches!(
+            self,
+            Self::Raven
+                | Self::RetroRobot
+                | Self::SilverPresenter
+                | Self::CurlyPresenter
+                | Self::BlackSuitPresenter
+                | Self::BlueJacketPresenter
+        )
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct AvatarControl(AtomicU64);
 
 impl AvatarControl {
+    const KIND_MASK: u64 = 255;
+    const SPLIT: u64 = 256;
+    const REVISION: u64 = 512;
+
     pub fn snapshot(&self) -> u64 {
         self.0.load(Ordering::Acquire)
     }
@@ -37,7 +72,7 @@ impl AvatarControl {
 
     pub fn kind_at(snapshot: u64) -> AvatarKind {
         AvatarKind::ALL
-            .get((snapshot & 255) as usize)
+            .get((snapshot & Self::KIND_MASK) as usize)
             .copied()
             .unwrap_or_default()
     }
@@ -46,8 +81,21 @@ impl AvatarControl {
         let _ = self
             .0
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
-                Some((old & !255).wrapping_add(256) | kind as u64)
+                Some((old & !Self::KIND_MASK).wrapping_add(Self::REVISION) | kind as u64)
             });
+    }
+
+    pub(crate) fn split_at(snapshot: u64) -> bool {
+        snapshot & Self::SPLIT != 0
+    }
+
+    pub fn set_split(&self, split: bool) -> bool {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
+                (Self::split_at(old) != split)
+                    .then(|| old.wrapping_add(Self::REVISION) ^ Self::SPLIT)
+            })
+            .is_ok()
     }
 }
 

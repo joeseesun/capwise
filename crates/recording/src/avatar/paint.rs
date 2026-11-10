@@ -59,7 +59,10 @@ impl Portrait {
         }
     }
 
-    pub fn draw(&mut self, kind: AvatarKind, pose: Pose, elapsed: f32) {
+    pub fn draw(&mut self, kind: AvatarKind, pose: Pose, elapsed: f32, split: bool) {
+        if super::illustrated::draw(&mut self.pixels, kind, pose, elapsed, split) {
+            return;
+        }
         let (fur, dark, background, shirt) = match kind {
             AvatarKind::Bear => (0xb58c69, 0x77543c, 0xe8e3d9, 0x546f73),
             AvatarKind::Fox => (0xd58c50, 0x955733, 0xe9e1d5, 0x59637d),
@@ -175,19 +178,19 @@ mod tests {
     #[test]
     fn characters_and_expressions_produce_distinct_opaque_frames() {
         let mut portrait = Portrait::new();
-        portrait.draw(AvatarKind::Cat, Pose::default(), 0.);
+        portrait.draw(AvatarKind::Cat, Pose::default(), 0., false);
         let cat = portrait.pixels.data().to_vec();
         assert!(cat.chunks_exact(4).all(|pixel| pixel[3] == 255));
         if let Ok(directory) = std::env::var("CAP_AVATAR_TEST_PORTRAITS") {
             for kind in [AvatarKind::Cat, AvatarKind::Bear, AvatarKind::Fox] {
-                portrait.draw(kind, Pose::default(), 0.);
+                portrait.draw(kind, Pose::default(), 0., false);
                 portrait
                     .pixels
                     .save_png(std::path::Path::new(&directory).join(format!("{kind:?}.png")))
                     .unwrap();
             }
         }
-        portrait.draw(AvatarKind::Bear, Pose::default(), 0.);
+        portrait.draw(AvatarKind::Bear, Pose::default(), 0., false);
         assert_ne!(cat, portrait.pixels.data());
         portrait.draw(
             AvatarKind::Cat,
@@ -198,6 +201,7 @@ mod tests {
                 ..Pose::default()
             },
             0.,
+            false,
         );
         assert_ne!(cat, portrait.pixels.data());
     }
