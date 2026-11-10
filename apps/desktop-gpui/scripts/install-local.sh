@@ -12,6 +12,22 @@ IDENTITY="${CAPWISE_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | 
 STAGE="$HERE/target/Capwise.app"
 DEST="/Applications/Capwise.app"
 ENTITLEMENTS="$HERE/packaging/macos/Entitlements.plist"
+REVISION="$(git -C "$ROOT" rev-parse HEAD)"
+
+verify_source() {
+  if [[ "$(git -C "$ROOT" rev-parse HEAD)" != "$REVISION" || -n "$(git -C "$ROOT" status --porcelain)" ]]; then
+    echo "Install from a clean, committed checkout so the installed build can be identified." >&2
+    exit 1
+  fi
+  local installed_revision
+  installed_revision="$(/usr/libexec/PlistBuddy -c 'Print :CapwiseLocalTestCommit' "$DEST/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ -n "$installed_revision" ]] && ! git -C "$ROOT" merge-base --is-ancestor "$installed_revision" "$REVISION" 2>/dev/null; then
+    echo "The installed build contains commit $installed_revision. Update this checkout before replacing it." >&2
+    exit 1
+  fi
+}
+
+verify_source
 
 if [[ -z "$IDENTITY" ]]; then
   echo "No Developer ID Application identity found; set CAPWISE_SIGN_IDENTITY." >&2
@@ -29,6 +45,7 @@ cargo_flags=()
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/onnxruntime/lib" "$STAGE/Contents/Frameworks"
 cp "$HERE/packaging/macos/Info.plist" "$STAGE/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CapwiseLocalTestCommit string $REVISION" "$STAGE/Contents/Info.plist"
 xcrun actool "$HERE/packaging/macos/AppIcon.icon" --compile "$STAGE/Contents/Resources" \
   --platform macosx --minimum-deployment-target 13.0 --app-icon AppIcon --target-device mac \
   --output-partial-info-plist "$HERE/target/icon-partial.plist" >/dev/null
@@ -62,6 +79,7 @@ sign --entitlements "$ENTITLEMENTS" "$STAGE/Contents/MacOS/cap-cli"
 sign --entitlements "$ENTITLEMENTS" --identifier com.capwise.app "$STAGE"
 codesign --verify --strict "$STAGE"
 
+verify_source
 pkill -x Capwise 2>/dev/null && sleep 1 || true
 rm -rf "$DEST"
 ditto "$STAGE" "$DEST"
