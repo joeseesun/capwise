@@ -1,5 +1,6 @@
 use super::{
     AvatarKind, Pose,
+    layers::LayeredHead,
     motion::{HeadRig, sample},
 };
 use std::sync::OnceLock;
@@ -15,6 +16,7 @@ struct Artwork {
     gaze: [f32; 2],
     mouth: Region,
     head: HeadRig,
+    layers: Option<LayeredHead>,
 }
 
 fn crop([x, y, width, height]: Region) -> IntRect {
@@ -116,8 +118,11 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
                 .clone_rect(crop(split))
                 .expect("avatar art within sheet")
         };
+        let neutral = decode(neutral);
+        let layers = LayeredHead::new(kind, &neutral);
         Artwork {
-            neutral: decode(neutral),
+            neutral,
+            layers,
             expression: decode(expression),
             bubble: crop(relative(bubble)),
             eyes: eyes.map(relative),
@@ -255,16 +260,20 @@ pub(super) fn draw(target: &mut Pixmap, kind: AvatarKind, pose: Pose, split: boo
         let closed = ((0.52 - opening) / 0.41).clamp(0., 1.);
         blend(&artwork.expression, &mut frame, eye, closed, true);
     }
-    let speaking = ((pose.mouth - 0.025) / 0.56).clamp(0., 1.);
-    blend(
-        &artwork.expression,
-        &mut frame,
-        artwork.mouth,
-        speaking,
-        false,
-    );
-    shape_mouth(&mut frame, artwork.mouth, pose);
-    let frame = artwork.head.render(frame, pose);
+    let frame = if let Some(layers) = &artwork.layers {
+        layers.draw(frame, pose)
+    } else {
+        let speaking = ((pose.mouth - 0.025) / 0.56).clamp(0., 1.);
+        blend(
+            &artwork.expression,
+            &mut frame,
+            artwork.mouth,
+            speaking,
+            false,
+        );
+        shape_mouth(&mut frame, artwork.mouth, pose);
+        artwork.head.render(frame, pose)
+    };
     let frame = if split {
         extend_background(&frame)
     } else {

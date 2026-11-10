@@ -8,11 +8,15 @@ pub(crate) use macos::AvatarWorker;
 #[cfg(any(target_os = "macos", test))]
 mod illustrated;
 #[cfg(any(target_os = "macos", test))]
+mod layers;
+#[cfg(any(target_os = "macos", test))]
 mod motion;
 #[cfg(any(target_os = "macos", test))]
 mod paint;
 #[cfg(any(target_os = "macos", test))]
 mod tracking;
+#[cfg(any(target_os = "macos", test))]
+mod views;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
