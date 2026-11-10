@@ -1,4 +1,4 @@
-use super::{AvatarKind, Pose, views::SilverViews};
+use super::{AvatarKind, Pose, idle_body::IdleBody, views::SilverViews};
 use tiny_skia::{
     Color, FillRule, FilterQuality, IntRect, Mask, Paint, Path, PathBuilder, Pixmap, PixmapPaint,
     Transform,
@@ -65,7 +65,12 @@ impl LayeredHead {
         })
     }
 
-    pub(super) fn draw(&self, mut animated: Pixmap, pose: Pose) -> Pixmap {
+    pub(super) fn draw(
+        &self,
+        mut animated: Pixmap,
+        pose: Pose,
+        split_body: Option<&IdleBody>,
+    ) -> Pixmap {
         let yaw = pose.yaw.clamp(-1., 1.);
         let pitch = pose.pitch.clamp(-1., 1.);
         let roll = pose.roll.clamp(-0.50, 0.50) * 0.47;
@@ -84,6 +89,9 @@ impl LayeredHead {
         };
         let mut plate = self.plate.clone();
         self.draw_neck_socket(&mut plate, yaw);
+        if let Some(body) = split_body {
+            plate = body.draw(&plate);
+        }
         let translate_x = yaw * if self.silver.is_none() { 5. } else { 3. };
         let translate_y = pitch * if self.silver.is_none() { 4. } else { 5. };
         let transform = Transform::from_translate(x - pivot_x, y - pivot_y)

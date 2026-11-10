@@ -78,12 +78,29 @@ impl Portrait {
         self.oval([76., 540., 488., 80.], 0xd0d8d1, still);
         let breath = elapsed.mul_add(1.8, 0.).sin() * 2.;
         if split {
-            self.oval([149., 463. + breath, 80., 142.], shirt, still);
-            self.oval([411., 463. + breath, 80., 142.], shirt, still);
-            self.oval([154., 571. + breath, 47., 49.], fur, still);
-            self.oval([439., 571. + breath, 47., 49.], fur, still);
+            let torso = Transform::from_translate(0., breath);
+            self.oval([152., 566., 49., 55.], fur, torso);
+            self.oval([439., 566., 49., 55.], fur, torso);
+            let mut shirt_outline = PathBuilder::new();
+            shirt_outline.move_to(320., 426.);
+            shirt_outline.cubic_to(433., 426., 495., 478., 490., 550.);
+            shirt_outline.quad_to(488., 580., 472., 598.);
+            shirt_outline.quad_to(457., 604., 445., 598.);
+            shirt_outline.quad_to(432., 630., 420., 659.);
+            shirt_outline.line_to(220., 659.);
+            shirt_outline.quad_to(208., 630., 195., 598.);
+            shirt_outline.quad_to(183., 604., 168., 598.);
+            shirt_outline.quad_to(152., 580., 150., 550.);
+            shirt_outline.cubic_to(145., 478., 207., 426., 320., 426.);
+            shirt_outline.close();
+            self.shape(
+                shirt_outline.finish().expect("valid shirt outline"),
+                shirt,
+                torso,
+            );
+        } else {
+            self.oval([175., 426. + breath, 290., 260.], shirt, still);
         }
-        self.oval([175., 426. + breath, 290., 260.], shirt, still);
         self.curve(
             [
                 286.,

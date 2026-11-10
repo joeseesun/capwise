@@ -269,8 +269,9 @@ pub(super) fn draw(target: &mut Pixmap, kind: AvatarKind, pose: Pose, split: boo
         let closed = ((0.52 - opening) / 0.41).clamp(0., 1.);
         blend(&artwork.expression, &mut frame, eye, closed, true);
     }
+    let split_body = split.then_some(&artwork.idle_body);
     let frame = if let Some(layers) = &artwork.layers {
-        layers.draw(frame, pose)
+        layers.draw(frame, pose, split_body)
     } else {
         let speaking = ((pose.mouth - 0.025) / 0.56).clamp(0., 1.);
         blend(
@@ -281,10 +282,15 @@ pub(super) fn draw(target: &mut Pixmap, kind: AvatarKind, pose: Pose, split: boo
             false,
         );
         shape_mouth(&mut frame, artwork.mouth, pose);
-        artwork.head.render(frame, pose)
+        let frame = artwork.head.render(frame, pose);
+        if let Some(body) = split_body {
+            body.draw(&frame)
+        } else {
+            frame
+        }
     };
     let frame = if split {
-        extend_background(&artwork.idle_body.draw(&frame))
+        extend_background(&frame)
     } else {
         frame
             .clone_rect(artwork.bubble)
