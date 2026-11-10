@@ -1,3 +1,4 @@
 NSCameraUsageDescription = "Cap आपकी Caps में आपको रिकॉर्ड करने के लिए आपके कैमरा का उपयोग करता है।";
 NSMicrophoneUsageDescription = "Cap आपकी Caps में आपकी आवाज़ रिकॉर्ड करने के लिए आपके माइक्रोफ़ोन का उपयोग करता है।";
 NSScreenCaptureUsageDescription = "Cap आपकी Caps बनाने के लिए आपकी स्क्रीन रिकॉर्ड करता है।";
+NSSpeechRecognitionUsageDescription = "Capwise इस Mac पर आपकी आवाज़ पहचानता है, ताकि टेलीप्रॉम्प्टर आपके पढ़ने के साथ स्क्रॉल हो।";

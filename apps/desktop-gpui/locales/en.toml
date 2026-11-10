@@ -3889,6 +3889,12 @@ script = "Add a script before starting. Very long paragraphs may need line break
 layout = "Waiting for the script layout. Please try again."
 settings = "Open settings"
 choose_microphone = "Choose microphone"
+apple_privacy = "Follow your voice with on-device Apple Speech. No cloud account needed."
+apple_connecting = "Starting Apple Speech…"
+apple_permission = "Allow Speech Recognition for Capwise in System Settings."
+apple_unavailable = "On-device speech recognition is unavailable for this language or Mac."
+apple_interrupted = "Speech recognition was interrupted. Select the microphone button to retry."
+apple_manual = "Voice follow is paused for manual scrolling."
 
 [editor.workbench]
 captions_hidden = "Captions are hidden in the preview and export."

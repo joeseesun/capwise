@@ -3887,6 +3887,12 @@ script = "请先添加稿件；过长段落需要适当分段。"
 layout = "稿件布局尚未就绪，请稍后重试。"
 settings = "打开设置"
 choose_microphone = "选择麦克风"
+apple_privacy = "在本机识别语音并跟随朗读滚动，无需配置云端服务。"
+apple_connecting = "正在启动 Apple 语音识别…"
+apple_permission = "请在系统设置中允许灵录使用语音识别。"
+apple_unavailable = "当前语言或这台 Mac 暂不支持本机语音识别。"
+apple_interrupted = "语音识别已中断，点击麦克风按钮重试。"
+apple_manual = "语音跟读已暂停，可手动滚动。"
 
 [editor.workbench]
 captions_hidden = "字幕已隐藏，预览和导出都不显示。"

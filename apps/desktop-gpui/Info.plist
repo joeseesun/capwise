@@ -37,6 +37,8 @@
 	<string>Cap uses your camera to record you in your Caps</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Cap uses your microphone to record you in your Caps</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Capwise recognizes your speech on this Mac to scroll the teleprompter as you read.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Cap captures your screen as part of recording your Caps</string>
 	<key>NSCameraUseContinuityCameraDeviceType</key>

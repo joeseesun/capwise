@@ -1,3 +1,4 @@
 NSCameraUsageDescription = "Cap uses your camera to record you in your Caps";
 NSMicrophoneUsageDescription = "Cap uses your microphone to record you in your Caps";
 NSScreenCaptureUsageDescription = "Cap captures your screen as part of recording your Caps";
+NSSpeechRecognitionUsageDescription = "Capwise recognizes your speech on this Mac to scroll the teleprompter as you read.";

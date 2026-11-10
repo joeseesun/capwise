@@ -3853,6 +3853,12 @@ script = "先に原稿を追加してください。長すぎる段落には改�
 layout = "原稿のレイアウトを待っています。再試行してください。"
 settings = "設定を開く"
 choose_microphone = "マイクを選択"
+apple_privacy = "Apple のオンデバイス音声認識で朗読に合わせてスクロールします。クラウドアカウントは不要です。"
+apple_connecting = "Apple の音声認識を開始中…"
+apple_permission = "システム設定で Capwise の音声認識を許可してください。"
+apple_unavailable = "この言語または Mac ではオンデバイス音声認識を利用できません。"
+apple_interrupted = "音声認識が中断されました。マイクボタンを選んで再試行してください。"
+apple_manual = "音声追従を一時停止しました。手動でスクロールできます。"
 
 [editor.workbench]
 captions_hidden = "字幕はプレビューと書き出しで非表示になっています。"
