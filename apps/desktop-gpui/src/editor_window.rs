@@ -2591,6 +2591,7 @@ impl EditorWindow {
         // initial value reads `background.padding`/`rounding` (`CS:1799-1802`).
         self.flush_animated_gradient_selection();
         self.sidebar = crate::editor_sidebar::SidebarState::new(&self.project);
+        self.sidebar.caption_review.restore(&self.project_path);
         self.sidebar_loaded(window, cx);
         self.restore_pending_asset_browser(window, cx);
         cx.notify();
