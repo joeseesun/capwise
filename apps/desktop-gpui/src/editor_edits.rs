@@ -2718,8 +2718,7 @@ pub fn clip_trim_end(
 // Auto zoom
 // ---------------------------------------------------------------------------
 
-/// `DEFAULT_AUTO_ZOOM_AMOUNT` (`src-tauri/src/recording.rs:3704`).
-pub const DEFAULT_AUTO_ZOOM_AMOUNT: f64 = 2.0;
+pub const DEFAULT_AUTO_ZOOM_AMOUNT: f64 = 1.5;
 
 pub fn generate_zoom_segments_for_timeline(
     clicks_by_clip: &[Vec<CursorClickEvent>],
