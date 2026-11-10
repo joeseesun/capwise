@@ -21,6 +21,8 @@ fn settings_fixture(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Se
         page: Page::Recordings,
         settings: GeneralSettings::default(),
         menu: None,
+        teleprompter: Default::default(),
+        _teleprompter_recording: gpui::Subscription::new(|| {}),
         page_scroll: scroll.clone(),
         instant_quality_anchor: ScrollAnchor::for_handle(scroll.clone()),
         studio_quality_anchor: ScrollAnchor::for_handle(scroll),

@@ -624,7 +624,8 @@ impl EditorWindow {
         }
     }
 
-    pub(crate) fn reset_caption_editor(&mut self) {
+    pub(crate) fn reset_caption_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_caption_editor_edit(window, cx);
         if self.transcript.caption_only {
             self.transcript.caption_only = false;
             self.transcript.caption_editor = Default::default();
@@ -634,7 +635,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn open_transcript_cleanup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.reset_caption_editor();
+        self.reset_caption_editor(window, cx);
         if !self.transcript.open {
             self.toggle_transcript(window, cx);
         }
@@ -674,8 +675,8 @@ impl EditorWindow {
             return;
         }
         if self.transcript.open {
+            self.reset_caption_editor(window, cx);
             self.transcript.open = false;
-            self.reset_caption_editor();
             self.transcript.drag = None;
             self.transcript.resize = None;
             self.focus_root(window, cx);

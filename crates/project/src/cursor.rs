@@ -72,6 +72,30 @@ pub struct CursorEvents {
 }
 
 impl CursorEvents {
+    pub fn pressed_positions(&self) -> Vec<(f64, Option<XY<f64>>)> {
+        let mut moves: Vec<_> = self
+            .moves
+            .iter()
+            .filter(|event| event.time_ms.is_finite() && event.x.is_finite() && event.y.is_finite())
+            .collect();
+        if !moves.is_sorted_by(|a, b| a.time_ms <= b.time_ms) {
+            moves.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        }
+
+        let mut positions: Vec<_> = self
+            .clicks
+            .iter()
+            .filter(|click| click.down && click.time_ms.is_finite())
+            .map(|click| {
+                let end = moves.partition_point(|event| event.time_ms <= click.time_ms);
+                let position = moves[..end].last().map(|event| XY::new(event.x, event.y));
+                (click.time_ms, position)
+            })
+            .collect();
+        positions.sort_by(|a, b| a.0.total_cmp(&b.0));
+        positions
+    }
+
     pub fn load_clicks_from_file(path: &Path) -> Result<Vec<CursorClickEvent>, String> {
         #[derive(Deserialize)]
         struct Clicks {

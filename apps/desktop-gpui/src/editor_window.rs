@@ -605,32 +605,10 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     })
 }
 
-pub(crate) fn load_recording_clicks(
-    project_path: &std::path::Path,
-) -> Vec<Vec<cap_project::CursorClickEvent>> {
-    let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
-        return Vec::new();
-    };
-    let RecordingMetaInner::Studio(studio) = &meta.inner else {
-        return Vec::new();
-    };
-    let load = |cursor: Option<PathBuf>| {
-        cursor
-            .and_then(|cursor| cap_project::CursorEvents::load_clicks_from_file(&cursor).ok())
-            .unwrap_or_default()
-    };
-    match &**studio {
-        StudioRecordingMeta::SingleSegment { segment } => {
-            vec![load(
-                segment.cursor.as_ref().map(|cursor| meta.path(cursor)),
-            )]
-        }
-        StudioRecordingMeta::MultipleSegments { inner } => inner
-            .segments
-            .iter()
-            .map(|segment| load(segment.cursor.as_ref().map(|cursor| meta.path(cursor))))
-            .collect(),
-    }
+fn load_recording_zoom_inputs(project_path: &std::path::Path) -> Vec<edits::AutoZoomClip> {
+    RecordingMeta::load_for_project(project_path)
+        .map(|meta| edits::load_auto_zoom_clips(&meta))
+        .unwrap_or_default()
 }
 
 fn has_recorded_cursor_data(meta: &RecordingMeta, studio: &StudioRecordingMeta) -> bool {
@@ -2507,6 +2485,10 @@ impl EditorWindow {
     }
 
     pub(crate) fn flush_pending_saves(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.apply_caption_editor_draft_for_save() {
+            self.project_changed_live(cx);
+            self.pending_save.borrow_mut().queue(self.project.clone());
+        }
         self.commit_pretty_name(cx)?;
         self.pending_save
             .borrow_mut()
@@ -3148,6 +3130,7 @@ impl EditorWindow {
         if self.voiceover.is_busy() {
             return;
         }
+        self.commit_caption_editor_edit(window, cx);
         self.stop_canvas_text_edit(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
@@ -3164,6 +3147,7 @@ impl EditorWindow {
         if self.voiceover.is_busy() {
             return;
         }
+        self.commit_caption_editor_edit(window, cx);
         self.stop_canvas_text_edit(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
@@ -7131,19 +7115,13 @@ impl EditorWindow {
         cx.spawn_in(window, async move |this, cx| {
             let clicks = cx
                 .background_executor()
-                .spawn(async move { load_recording_clicks(&path) })
+                .spawn(async move { load_recording_zoom_inputs(&path) })
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.generating_auto_zoom = false;
                 this.hovering_generate_zoom = false;
                 edits::ensure_timeline(&mut this.project, &this.clip_display_durations);
-                let segments = this
-                    .project
-                    .timeline
-                    .as_ref()
-                    .map_or_else(Vec::new, |timeline| {
-                        edits::generate_zoom_segments_for_timeline(&clicks, timeline, amount)
-                    });
+                let segments = edits::generate_zoom_segments(&clicks, &this.project, amount);
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");
                     this.auto_zoom_message = Some(tr::editor::window::zoom_lane::no_clicks);
@@ -15845,9 +15823,16 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+        let load_positions = || {
+            load_recording_zoom_inputs(&root)
+                .into_iter()
+                .map(|clip| clip.positions)
+                .collect::<Vec<_>>()
+        };
+        let position = (4000.0, Some(cap_project::XY::new(0.5, 0.5)));
         assert_eq!(
-            load_recording_clicks(&root),
-            vec![vec![], vec![], vec![], vec![click.clone()]]
+            load_positions(),
+            vec![vec![], vec![], vec![], vec![position]]
         );
         std::fs::write(
             &meta_path,
@@ -15858,70 +15843,8 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(load_recording_clicks(&root), vec![vec![click]]);
+        assert_eq!(load_positions(), vec![vec![position]]);
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    #[ignore = "set CAP_AUTO_ZOOM_BENCH_PROJECT to a disposable recording bundle"]
-    fn auto_zoom_click_loading_benchmark() {
-        let path = PathBuf::from(std::env::var_os("CAP_AUTO_ZOOM_BENCH_PROJECT").unwrap());
-        let meta = RecordingMeta::load_for_project(&path).unwrap();
-        let RecordingMetaInner::Studio(studio) = &meta.inner else {
-            panic!("benchmark requires a Studio recording");
-        };
-        let full_events = || match &**studio {
-            StudioRecordingMeta::SingleSegment { segment } => {
-                let mut events = segment
-                    .cursor
-                    .as_ref()
-                    .map_or_else(cap_project::CursorEvents::default, |cursor| {
-                        cap_project::CursorEvents::load_from_file(&meta.path(cursor)).unwrap()
-                    });
-                let pointer_ids = studio.pointer_cursor_ids();
-                events.stabilize_short_lived_cursor_shapes(
-                    (!pointer_ids.is_empty()).then_some(&pointer_ids),
-                    cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
-                );
-                vec![events.clicks]
-            }
-            StudioRecordingMeta::MultipleSegments { inner } => inner
-                .segments
-                .iter()
-                .map(|segment| segment.cursor_events(&meta).clicks)
-                .collect(),
-        };
-        let times = |clips: Vec<Vec<cap_project::CursorClickEvent>>| {
-            clips
-                .into_iter()
-                .map(|clicks| {
-                    clicks
-                        .into_iter()
-                        .map(|click| click.time_ms)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(times(full_events()), times(load_recording_clicks(&path)));
-        for round in 0..7 {
-            for full in if round % 2 == 0 {
-                [true, false]
-            } else {
-                [false, true]
-            } {
-                let start = std::time::Instant::now();
-                let clicks = if full {
-                    full_events()
-                } else {
-                    load_recording_clicks(&path)
-                };
-                std::hint::black_box(&clicks);
-                println!(
-                    "round={round} full_events={full} elapsed_ms={:.3}",
-                    start.elapsed().as_secs_f64() * 1000.0
-                );
-            }
-        }
     }
 
     #[test]

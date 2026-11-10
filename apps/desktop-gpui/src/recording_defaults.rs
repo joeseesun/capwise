@@ -304,32 +304,24 @@ pub(crate) fn prepare_project(
     if captions.settings.font == "System Sans-Serif" {
         captions.settings.font = "Noto Sans SC".to_string();
     }
-    if let Some(timeline) = project.timeline.as_mut() {
-        if inputs.auto_zoom && timeline.zoom_segments.is_empty() {
-            let load = |cursor: Option<std::path::PathBuf>| -> Result<Vec<cap_project::CursorClickEvent>, String> {
-                match cursor {
-                    Some(cursor) => cap_project::CursorEvents::load_clicks_from_file(&cursor)
-                        .map_err(|error| error.to_string()),
-                    None => Ok(Vec::new()),
-                }
-            };
-            let clicks = match meta.studio_meta() {
-                Some(StudioRecordingMeta::SingleSegment { segment }) => vec![load(
-                    segment.cursor.as_ref().map(|cursor| meta.path(cursor)),
-                )?],
-                Some(StudioRecordingMeta::MultipleSegments { inner }) => inner
-                    .segments
-                    .iter()
-                    .map(|segment| load(segment.cursor.as_ref().map(|cursor| meta.path(cursor))))
-                    .collect::<Result<Vec<_>, _>>()?,
-                None => Vec::new(),
-            };
-            timeline.zoom_segments = crate::editor_edits::generate_zoom_segments_for_timeline(
-                &clicks,
-                timeline,
-                f64::from(inputs.zoom_amount),
-            );
+    inputs.studio_layout.apply(&mut project, has_camera);
+    if inputs.auto_zoom
+        && project
+            .timeline
+            .as_ref()
+            .is_some_and(|timeline| timeline.zoom_segments.is_empty())
+    {
+        let clips = crate::editor_edits::load_auto_zoom_clips(&meta);
+        let zooms = crate::editor_edits::generate_zoom_segments(
+            &clips,
+            &project,
+            f64::from(inputs.zoom_amount),
+        );
+        if let Some(timeline) = project.timeline.as_mut() {
+            timeline.zoom_segments = zooms;
         }
+    }
+    if let Some(timeline) = project.timeline.as_mut() {
         if inputs.keyboard && timeline.keyboard_segments.is_empty() {
             let keyboard = project.keyboard.get_or_insert_with(Default::default);
             timeline.keyboard_segments = cap_project::generate_project_keyboard_segments(
@@ -359,7 +351,6 @@ pub(crate) fn prepare_project(
             keyboard.settings.enabled = !timeline.keyboard_segments.is_empty();
         }
     }
-    inputs.studio_layout.apply(&mut project, has_camera);
     Ok((project, workflow, has_audio))
 }
 

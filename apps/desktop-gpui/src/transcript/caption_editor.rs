@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
 use cap_project::{CaptionSegment, ProjectConfiguration};
 use gpui::{
@@ -40,6 +40,8 @@ pub(super) struct CaptionEditor {
     list: ListState,
     matches: Vec<Match>,
     menu: Option<DeleteMenu>,
+    draft: Option<(SharedString, String)>,
+    commit_task: Option<gpui::Task<()>>,
 }
 
 impl Default for CaptionEditor {
@@ -50,6 +52,8 @@ impl Default for CaptionEditor {
             list: ListState::new(0, ListAlignment::Top, px(160.)).with_uniform_item_height(px(42.)),
             matches: Vec::new(),
             menu: None,
+            draft: None,
+            commit_task: None,
         }
     }
 }
@@ -153,6 +157,24 @@ fn apply_caption_text(
     }
     segment.text = text;
     true
+}
+
+fn edit_caption_text(
+    project: &mut ProjectConfiguration,
+    id: &str,
+    text: String,
+    selected: Option<Range<usize>>,
+) -> bool {
+    project
+        .captions
+        .as_mut()
+        .and_then(|captions| {
+            captions
+                .segments
+                .iter_mut()
+                .find(|segment| segment.id == id)
+        })
+        .is_some_and(|segment| apply_caption_text(segment, text, selected))
 }
 
 impl CaptionEditor {
@@ -259,6 +281,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.commit_caption_editor_edit(window, cx);
         self.prepare_caption_editor();
         let Some(search) = self.transcript.search.as_ref() else {
             return;
@@ -309,6 +332,57 @@ impl EditorWindow {
         }
     }
 
+    fn queue_caption_editor_edit(
+        &mut self,
+        id: SharedString,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.transcript.open || !self.transcript.caption_only {
+            return;
+        }
+        if self
+            .transcript
+            .caption_editor
+            .draft
+            .as_ref()
+            .is_some_and(|(pending, _)| *pending != id)
+        {
+            self.commit_caption_editor_edit(window, cx);
+        }
+        let editor = &mut self.transcript.caption_editor;
+        editor.draft = Some((id, text));
+        editor.commit_task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(220))
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.commit_caption_editor_edit(window, cx)
+            })
+            .ok();
+        }));
+    }
+
+    pub(crate) fn commit_caption_editor_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor = &mut self.transcript.caption_editor;
+        if let Some((id, text)) = editor.draft.take() {
+            self.caption_editor_edit(&id, text, None, window, cx);
+        }
+    }
+
+    pub(crate) fn apply_caption_editor_draft_for_save(&mut self) -> bool {
+        let Some((id, text)) = self.transcript.caption_editor.draft.take() else {
+            return false;
+        };
+        self.transcript.caption_editor.commit_task = None;
+        edit_caption_text(&mut self.project, &id, text, None)
+    }
+
     fn caption_editor_edit(
         &mut self,
         id: &str,
@@ -321,16 +395,7 @@ impl EditorWindow {
             return;
         }
         self.edit_project_global("caption-editor-text", window, cx, move |project| {
-            project
-                .captions
-                .as_mut()
-                .and_then(|captions| {
-                    captions
-                        .segments
-                        .iter_mut()
-                        .find(|segment| segment.id == id)
-                })
-                .is_some_and(|segment| apply_caption_text(segment, text, selected))
+            edit_caption_text(project, id, text, selected)
         });
     }
 
@@ -356,6 +421,7 @@ impl EditorWindow {
                                 (input.text().to_string(), input.selection())
                             };
                             if !range.is_empty() && text.get(range.clone()).is_some() {
+                                this.commit_caption_editor_edit(window, cx);
                                 text.replace_range(range.clone(), "");
                                 window.focus(&this.transcript.focus, cx);
                                 this.caption_editor_edit(&menu.id, text, Some(range), window, cx);
@@ -385,6 +451,7 @@ impl EditorWindow {
                 .into_any_element();
         }
         let inputs = editor.inputs.clone();
+        let pending_id = editor.draft.as_ref().map(|(id, _)| id.clone());
         let view = cx.weak_entity();
         let current_match = self
             .transcript
@@ -418,9 +485,23 @@ impl EditorWindow {
                                     let _ = view.update(cx, |this, cx| match event {
                                         ui::TextInputEvent::Changed => {
                                             let text = input.read(cx).text().to_string();
-                                            this.caption_editor_edit(&id, text, None, window, cx);
+                                            this.queue_caption_editor_edit(
+                                                id.clone(),
+                                                text,
+                                                window,
+                                                cx,
+                                            );
                                         }
                                         ui::TextInputEvent::Blurred => {
+                                            if this
+                                                .transcript
+                                                .caption_editor
+                                                .draft
+                                                .as_ref()
+                                                .is_some_and(|(pending, _)| pending == &id)
+                                            {
+                                                this.commit_caption_editor_edit(window, cx);
+                                            }
                                             input.update(cx, |input, cx| {
                                                 input.place_cursor(input.selection().end, cx);
                                             });
@@ -440,7 +521,9 @@ impl EditorWindow {
                             }
                         })
                         .input;
-                    if input.read(cx).text() != row.text.as_ref() {
+                    if pending_id.as_ref() != Some(&row.id)
+                        && input.read(cx).text() != row.text.as_ref()
+                    {
                         input.update(cx, |input, cx| input.set_text(row.text.clone(), cx));
                     }
                     caption_row(

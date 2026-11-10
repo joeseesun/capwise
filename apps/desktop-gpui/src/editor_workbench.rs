@@ -315,7 +315,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn open_text_video_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.reset_caption_editor();
+        self.reset_caption_editor(window, cx);
         if !self.transcript.open {
             self.toggle_transcript(window, cx);
         }

@@ -374,6 +374,7 @@ pub struct TeleprompterWindow {
 impl TeleprompterWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let state = TeleprompterState::load();
+        let voice_mode = crate::settings_teleprompter::default_voice_follow();
         let save = Rc::new(RefCell::new(PendingSave {
             state: state.clone(),
             keys: BTreeSet::new(),
@@ -450,7 +451,12 @@ impl TeleprompterWindow {
             let started = matches!(phase, Phase::Recording { paused: false })
                 && !matches!(this.last_phase, Phase::Recording { .. });
             this.last_phase = phase;
-            if started && !this.editing && !this.ai_open && this.has_script() {
+            if started
+                && !this.editing
+                && !this.ai_open
+                && this.has_script()
+                && crate::settings_teleprompter::auto_start()
+            {
                 if this.voice_mode {
                     if !this.follow_active() {
                         this.start_follow(window, cx);
@@ -539,7 +545,7 @@ impl TeleprompterWindow {
             bar_task: None,
             over_bar: false,
             play_menu_open: false,
-            voice_mode: false,
+            voice_mode,
             toast: None,
             toast_task: None,
             clicked_offset: None,
@@ -676,6 +682,13 @@ impl TeleprompterWindow {
             });
         }
         cx.notify();
+    }
+
+    pub(crate) fn apply_default_speed(&mut self, speed: u32) {
+        self.state.words_per_minute = speed;
+        let mut save = self.save.borrow_mut();
+        save.state.words_per_minute = speed;
+        save.keys.remove(TeleprompterState::WORDS_PER_MINUTE);
     }
 
     fn change_speed(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
@@ -2116,8 +2129,12 @@ impl TeleprompterWindow {
         if self.ai_running || topic.is_empty() || topic.chars().count() > 5_000 {
             return;
         }
-        let Some(provider) = crate::llm::default_content_model() else {
-            self.ai_error = Some(tr::dialog::teleprompter::assist::model_missing().into());
+        let Some(provider) = crate::settings_teleprompter::script_model() else {
+            self.ai_error = Some(if crate::settings_teleprompter::has_explicit_model() {
+                tr::settings::teleprompter::model_unavailable().into()
+            } else {
+                tr::dialog::teleprompter::assist::model_missing().into()
+            });
             cx.notify();
             return;
         };
@@ -2255,7 +2272,7 @@ impl TeleprompterWindow {
         let theme = self.theme;
         let topic = self.ai_topic.read(cx).text().trim();
         let can_generate = !self.ai_running && !topic.is_empty() && topic.chars().count() <= 5_000;
-        let ready = crate::llm::default_content_model().is_some();
+        let ready = crate::settings_teleprompter::script_model().is_some();
         let content = div()
             .w_full()
             .flex()
@@ -2303,7 +2320,7 @@ impl TeleprompterWindow {
                         self.button("prompter-ai-settings", copy::settings())
                             .on_click(|_, _, cx| {
                                 crate::app_windows::open_settings(
-                                    crate::settings_window::Page::Transcription,
+                                    crate::settings_window::Page::Teleprompter,
                                     cx,
                                 )
                             }),

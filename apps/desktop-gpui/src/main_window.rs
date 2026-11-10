@@ -3759,6 +3759,7 @@ impl MainWindow {
     fn render_header_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let keyboard_nav = self.keyboard_nav;
+        let teleprompter_active = app_windows::launcher_teleprompter_active(cx);
 
         // `IconButton::header`: a 20px hit box with no fill, `text-gray-11`
         // going to `text-gray-12` on hover.
@@ -3768,6 +3769,9 @@ impl MainWindow {
                 "settings" => tr::main::header::settings(),
                 "screenshots" => tr::main::header::screenshots(),
                 "recordings" => tr::main::header::recordings(),
+                "teleprompter" if teleprompter_active => {
+                    tr::settings::teleprompter::launcher_active()
+                }
                 "teleprompter" => tr::main::header::teleprompter(),
                 "changelog" => tr::main::header::changelog(),
                 _ => unreachable!(),
@@ -3783,7 +3787,15 @@ impl MainWindow {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(20.))
+                .h(px(20.))
+                .when(id != "teleprompter", |button| button.w(px(20.)))
+                .when(id == "teleprompter", |button| {
+                    button
+                        .px(px(5.))
+                        .gap(px(3.))
+                        .text_size(px(11.))
+                        .when(teleprompter_active, |button| button.bg(theme.gray_4))
+                })
                 .flex_shrink_0()
                 .rounded_full()
                 .text_color(theme.gray_11)
@@ -3843,13 +3855,18 @@ impl MainWindow {
                         )),
                     )
                     .child(
-                        icon_button("teleprompter", "icons/scan-text.svg", 16.).on_click(
-                            cx.listener(|_, _, _window, cx| {
-                                // `onClick={() => void openTeleprompter()}` on
-                                // the header's `IconLucideScanText` button.
-                                // Deferred for the same reason the gear is.
-                                cx.defer(app_windows::open_teleprompter);
-                            }),
+                        icon_button(
+                            "teleprompter",
+                            if teleprompter_active {
+                                "icons/check.svg"
+                            } else {
+                                "icons/scan-text.svg"
+                            },
+                            14.,
+                        )
+                        .child(tr::settings::teleprompter::launcher())
+                        .on_click(
+                            cx.listener(|_, _, _, cx| cx.defer(app_windows::open_teleprompter)),
                         ),
                     )
                     .child(icon_button("settings", "icons/settings.svg", 16.).on_click(
