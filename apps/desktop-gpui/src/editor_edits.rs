@@ -4404,7 +4404,8 @@ mod tests {
     ) -> Vec<ZoomSegment> {
         let project = config(serde_json::json!({
             "timeline": {
-                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": duration }]
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": duration }],
+                "zoomSegments": []
             }
         }));
         generate_zoom_segments_for_timeline(&[clicks], project.timeline.as_ref().unwrap(), amount)
