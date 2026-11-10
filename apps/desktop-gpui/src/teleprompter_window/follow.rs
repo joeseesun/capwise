@@ -627,6 +627,8 @@ impl TeleprompterWindow {
         };
         Some(
             div()
+                .id("prompter-follow-status")
+                .occlude()
                 .flex()
                 .flex_row()
                 .items_center()
