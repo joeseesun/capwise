@@ -3853,6 +3853,12 @@ script = "Vor dem Start ein Skript hinzufügen. Sehr lange Absätze gegebenenfal
 layout = "Das Skript wird noch angeordnet. Bitte erneut versuchen."
 settings = "Einstellungen öffnen"
 choose_microphone = "Mikrofon auswählen"
+apple_privacy = "Folgt Ihrer Stimme mit der lokalen Apple-Spracherkennung. Kein Cloud-Konto erforderlich."
+apple_connecting = "Apple-Spracherkennung wird gestartet…"
+apple_permission = "Erlauben Sie Capwise die Spracherkennung in den Systemeinstellungen."
+apple_unavailable = "Die lokale Spracherkennung ist für diese Sprache oder diesen Mac nicht verfügbar."
+apple_interrupted = "Die Spracherkennung wurde unterbrochen. Wählen Sie die Mikrofontaste, um es erneut zu versuchen."
+apple_manual = "Die Sprachverfolgung pausiert für manuelles Scrollen."
 
 [editor.workbench]
 captions_hidden = "Untertitel sind in der Vorschau und im Export ausgeblendet."

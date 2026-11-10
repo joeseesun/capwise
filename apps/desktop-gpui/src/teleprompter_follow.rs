@@ -775,7 +775,11 @@ fn tokens(text: &str, base: usize) -> Vec<ScriptToken> {
     tokens
 }
 
-fn aligned_tokens(spoken: &[ScriptToken], script: &[ScriptToken]) -> Option<(f32, usize)> {
+fn aligned_tokens(
+    spoken: &[ScriptToken],
+    script: &[ScriptToken],
+    allow_one_error: bool,
+) -> Option<(f32, usize)> {
     let width = script.len() + 1;
     let mut matrix = vec![0u16; (spoken.len() + 1) * width];
     for (i, first) in spoken.iter().enumerate() {
@@ -789,7 +793,9 @@ fn aligned_tokens(spoken: &[ScriptToken], script: &[ScriptToken]) -> Option<(f32
     }
     let matched = usize::from(matrix[spoken.len() * width + script.len()]);
     let confidence = matched as f32 / spoken.len() as f32;
-    if matched < 3 || confidence < 0.85 {
+    if matched < 3
+        || (confidence < 0.85 && !(allow_one_error && matched >= 4 && spoken.len() == matched + 1))
+    {
         return None;
     }
     let (mut i, mut j) = (spoken.len(), script.len());
@@ -808,7 +814,8 @@ fn aligned_tokens(spoken: &[ScriptToken], script: &[ScriptToken]) -> Option<(f32
     pairs.reverse();
     let first = pairs.first()?.1;
     let last = pairs.last()?.1;
-    if last - first + 1 > matched + 2 {
+    let allowed_gap = if allow_one_error { 1 } else { 2 };
+    if last - first + 1 > matched + allowed_gap {
         return None;
     }
     if spoken
@@ -837,6 +844,15 @@ struct PartialMatch {
     end_ms: u64,
 }
 
+#[cfg(any(target_os = "macos", test))]
+struct SpeechCandidate {
+    sentence: usize,
+    read_offset: usize,
+    text: String,
+    task_start_ms: u64,
+    since: Instant,
+}
+
 pub struct ScriptFollower {
     sentences: Vec<Sentence>,
     current: usize,
@@ -848,6 +864,10 @@ pub struct ScriptFollower {
     generation: Option<FollowGeneration>,
     active: bool,
     partial: Option<PartialMatch>,
+    #[cfg(any(target_os = "macos", test))]
+    speech_candidate: Option<SpeechCandidate>,
+    #[cfg(any(target_os = "macos", test))]
+    speech_offset: Option<usize>,
 }
 
 impl ScriptFollower {
@@ -909,6 +929,10 @@ impl ScriptFollower {
             generation: None,
             active: false,
             partial: None,
+            #[cfg(any(target_os = "macos", test))]
+            speech_candidate: None,
+            #[cfg(any(target_os = "macos", test))]
+            speech_offset: None,
         })
     }
 
@@ -924,6 +948,11 @@ impl ScriptFollower {
         self.ignore_through = None;
         self.pending_jump = None;
         self.partial = None;
+        #[cfg(any(target_os = "macos", test))]
+        {
+            self.speech_candidate = None;
+            self.speech_offset = None;
+        }
         Ok(())
     }
 
@@ -973,6 +1002,10 @@ impl ScriptFollower {
         self.manual_hold = true;
         self.pending_jump = None;
         self.partial = None;
+        #[cfg(any(target_os = "macos", test))]
+        {
+            self.speech_candidate = None;
+        }
     }
 
     pub fn resume_at(&mut self, sentence: usize) -> Result<(), FollowError> {
@@ -984,7 +1017,111 @@ impl ScriptFollower {
         self.ignore_through = self.latest_seen;
         self.pending_jump = None;
         self.partial = None;
+        #[cfg(any(target_os = "macos", test))]
+        {
+            self.speech_candidate = None;
+            self.speech_offset = None;
+        }
         Ok(())
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    pub fn update_spoken_for(
+        &mut self,
+        generation: FollowGeneration,
+        update: &RecognitionUpdate,
+    ) -> FollowDecision {
+        if !self.active || self.generation != Some(generation) {
+            return FollowDecision::Stay(StayReason::StaleGeneration);
+        }
+        if self.manual_hold {
+            return FollowDecision::Stay(StayReason::ManualHold);
+        }
+        if update.text.len() > 20_000 || update.end_ms < update.start_ms {
+            return FollowDecision::Stay(StayReason::Unmatched);
+        }
+
+        let spoken = tokens(&update.text, 0);
+        let min_length = if update.definite { 3 } else { 4 };
+        let mut best = None;
+        let mut ambiguous = false;
+        for (index, sentence) in self.sentences.iter().enumerate().skip(self.current).take(3) {
+            let candidate = (min_length..=spoken.len().min(12))
+                .rev()
+                .find_map(|length| {
+                    let suffix = &spoken[spoken.len() - length..];
+                    let (confidence, read_offset) = aligned_tokens(suffix, &sentence.tokens, true)?;
+                    let score = length as f32 * confidence - (1. - confidence);
+                    Some((
+                        score,
+                        ScriptAnchor {
+                            sentence: index,
+                            bytes: sentence.bytes.clone(),
+                            confidence,
+                            read_offset,
+                        },
+                    ))
+                });
+            let Some((score, anchor)) = candidate else {
+                continue;
+            };
+            match &best {
+                Some((best_score, _)) if score < *best_score - 0.05 => {}
+                Some((best_score, _)) if score <= *best_score + 0.05 => ambiguous = true,
+                _ => {
+                    best = Some((score, anchor));
+                    ambiguous = false;
+                }
+            }
+        }
+        let Some((_, anchor)) = best else {
+            self.speech_candidate = None;
+            return FollowDecision::Stay(StayReason::Unmatched);
+        };
+        if ambiguous {
+            self.speech_candidate = None;
+            return FollowDecision::Stay(StayReason::Ambiguous);
+        }
+        if self
+            .speech_offset
+            .is_some_and(|offset| anchor.read_offset <= offset)
+        {
+            self.speech_candidate = None;
+            return FollowDecision::Stay(StayReason::Duplicate);
+        }
+
+        if update.definite {
+            self.speech_candidate = None;
+            self.current = anchor.sentence;
+            self.speech_offset = Some(anchor.read_offset);
+            return FollowDecision::Move(anchor);
+        }
+        let previous = self.speech_candidate.take().filter(|candidate| {
+            candidate.sentence == anchor.sentence
+                && candidate.task_start_ms == update.start_ms
+                && candidate.read_offset <= anchor.read_offset
+        });
+        let since = previous
+            .as_ref()
+            .map(|candidate| candidate.since)
+            .unwrap_or_else(Instant::now);
+        let confirmed = previous.is_some_and(|candidate| {
+            candidate.text != update.text && since.elapsed() >= Duration::from_millis(180)
+        });
+        self.speech_candidate = Some(SpeechCandidate {
+            sentence: anchor.sentence,
+            read_offset: anchor.read_offset,
+            text: update.text.clone(),
+            task_start_ms: update.start_ms,
+            since,
+        });
+        if confirmed {
+            self.current = anchor.sentence;
+            self.speech_offset = Some(anchor.read_offset);
+            FollowDecision::Follow(anchor)
+        } else {
+            FollowDecision::Candidate(anchor)
+        }
     }
 
     fn update(&mut self, update: &RecognitionUpdate) -> FollowDecision {
@@ -1026,7 +1163,7 @@ impl ScriptFollower {
             .iter()
             .enumerate()
             .filter_map(|(index, sentence)| {
-                let (confidence, read_offset) = aligned_tokens(&spoken, &sentence.tokens)?;
+                let (confidence, read_offset) = aligned_tokens(&spoken, &sentence.tokens, false)?;
                 Some((index, confidence, read_offset))
             })
             .collect();
@@ -1130,6 +1267,84 @@ mod tests {
             text: text.into(),
             definite,
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn apple_speech_follows_a_growing_transcript_without_jumping_on_first_partial() {
+        let mut follower =
+            ScriptFollower::new("今天介绍录屏编辑。首先打开录制窗口。然后选择屏幕区域。").unwrap();
+        follower.begin_session(GENERATION).unwrap();
+
+        for (partial, longer, sentence) in [
+            ("今天介绍", "今天介绍录屏", 0),
+            (
+                "今天介绍录屏编辑首先打开",
+                "今天介绍录屏编辑首先打开录制窗",
+                1,
+            ),
+            (
+                "今天介绍录屏编辑首先打开录制窗口然后选择",
+                "今天介绍录屏编辑首先打开录制窗口然后选择屏幕区",
+                2,
+            ),
+        ] {
+            assert!(matches!(
+                follower.update_spoken_for(GENERATION, &update(0, partial, false)),
+                FollowDecision::Candidate(_)
+            ));
+            tokio::time::advance(Duration::from_millis(200)).await;
+            let FollowDecision::Follow(anchor) =
+                follower.update_spoken_for(GENERATION, &update(0, longer, false))
+            else {
+                panic!("stable reading did not scroll: {longer}");
+            };
+            assert_eq!(anchor.sentence, sentence);
+        }
+        assert!(matches!(
+            follower.update_spoken_for(GENERATION, &update(1200, "今天介绍录屏编辑", true)),
+            FollowDecision::Stay(_)
+        ));
+        assert_eq!(follower.current_sentence(), 2);
+    }
+
+    #[test]
+    fn apple_speech_accepts_one_typo_or_omission_and_rejects_unrelated_speech() {
+        let script = "首先打开录制窗口。接下来选择当前屏幕。请设置麦克风音量。";
+        let mut follower = ScriptFollower::new(script).unwrap();
+        follower.begin_session(GENERATION).unwrap();
+        assert!(matches!(
+            follower.update_spoken_for(GENERATION, &update(0, "打开路制窗", true)),
+            FollowDecision::Move(ScriptAnchor { sentence: 0, .. })
+        ));
+        assert!(matches!(
+            follower.update_spoken_for(GENERATION, &update(1200, "接下来选当前屏幕", true)),
+            FollowDecision::Move(ScriptAnchor { sentence: 1, .. })
+        ));
+        assert!(matches!(
+            follower.update_spoken_for(GENERATION, &update(2400, "听起来苹果味道不错", true)),
+            FollowDecision::Stay(StayReason::Unmatched)
+        ));
+        assert_eq!(follower.current_sentence(), 1);
+    }
+
+    #[test]
+    fn apple_speech_ignores_ambiguous_matches_and_distinct_numbers() {
+        let mut follower = ScriptFollower::new(
+            "Press the record button. Press the record button again. Set the volume to 20 percent.",
+        )
+        .unwrap();
+        follower.begin_session(GENERATION).unwrap();
+        assert_eq!(
+            follower.update_spoken_for(GENERATION, &update(0, "press the record button", true)),
+            FollowDecision::Stay(StayReason::Ambiguous)
+        );
+        assert_eq!(
+            follower.update_spoken_for(
+                GENERATION,
+                &update(1200, "set the volume to 30 percent", true)
+            ),
+            FollowDecision::Stay(StayReason::Unmatched)
+        );
     }
 
     fn server_packet(flags: u8, sequence: Option<i32>, body: serde_json::Value) -> Vec<u8> {

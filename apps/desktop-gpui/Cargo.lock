@@ -1588,9 +1588,11 @@ dependencies = [
  "minisign-verify",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "objc2-avf-audio",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "objc2-speech",
  "ort",
  "parakeet-rs",
  "raw-window-handle",
@@ -7620,6 +7622,18 @@ dependencies = [
  "objc2-core-video",
  "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
+]
+
+[[package]]
+name = "objc2-speech"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9eb609f9d2a25e0f8b76954f3acaa58348ce2a91285fe867643b2224ac4d263"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-avf-audio",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

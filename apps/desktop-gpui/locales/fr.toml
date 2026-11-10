@@ -3853,6 +3853,12 @@ script = "Ajoutez un script avant de commencer. Les très longs paragraphes peuv
 layout = "La mise en page du script est en cours. Réessayez."
 settings = "Ouvrir les réglages"
 choose_microphone = "Choisir le microphone"
+apple_privacy = "Suit votre voix avec la reconnaissance Apple sur cet appareil. Aucun compte cloud requis."
+apple_connecting = "Démarrage de la reconnaissance vocale Apple…"
+apple_permission = "Autorisez Capwise à utiliser la reconnaissance vocale dans Réglages Système."
+apple_unavailable = "La reconnaissance vocale locale est indisponible pour cette langue ou ce Mac."
+apple_interrupted = "La reconnaissance vocale a été interrompue. Sélectionnez le bouton du microphone pour réessayer."
+apple_manual = "Le suivi vocal est en pause pour permettre le défilement manuel."
 
 [editor.workbench]
 captions_hidden = "Les sous-titres sont masqués dans l’aperçu et à l’exportation."

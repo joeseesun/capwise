@@ -1,3 +1,4 @@
 NSCameraUsageDescription = "Cap utilise votre caméra pour vous enregistrer dans vos Caps.";
 NSMicrophoneUsageDescription = "Cap utilise votre micro pour vous enregistrer dans vos Caps.";
 NSScreenCaptureUsageDescription = "Cap enregistre votre écran pour créer vos Caps.";
+NSSpeechRecognitionUsageDescription = "Capwise reconnaît votre voix sur ce Mac pour faire défiler le prompteur pendant votre lecture.";

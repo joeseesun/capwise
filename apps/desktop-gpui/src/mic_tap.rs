@@ -19,7 +19,7 @@ use crate::{
     session::{Phase, RecordingSession},
 };
 
-const SAMPLE_RATE: u32 = 16_000;
+pub(crate) const SAMPLE_RATE: u32 = 16_000;
 const PACKET_SAMPLES: usize = 3_200;
 const MAX_AUDIO_AGE: Duration = Duration::from_secs(1);
 

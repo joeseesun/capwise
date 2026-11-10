@@ -1521,7 +1521,7 @@ impl TeleprompterWindow {
                     item(
                         "prompter-mode-voice",
                         tr::dialog::teleprompter::follow::title(),
-                        tr::dialog::teleprompter::follow::privacy(),
+                        follow::privacy_copy(),
                         self.voice_mode,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {

@@ -3853,6 +3853,12 @@ script = "Añade un guion antes de iniciar. Los párrafos muy largos pueden nece
 layout = "Esperando la disposición del guion. Vuelve a intentarlo."
 settings = "Abrir ajustes"
 choose_microphone = "Elegir micrófono"
+apple_privacy = "Sigue tu voz con el reconocimiento de Apple en el dispositivo. No requiere una cuenta en la nube."
+apple_connecting = "Iniciando el reconocimiento de voz de Apple…"
+apple_permission = "Permite que Capwise use el reconocimiento de voz en Ajustes del Sistema."
+apple_unavailable = "El reconocimiento de voz local no está disponible para este idioma o Mac."
+apple_interrupted = "Se interrumpió el reconocimiento de voz. Selecciona el botón del micrófono para reintentar."
+apple_manual = "El seguimiento por voz está en pausa. Puedes desplazarte manualmente."
 
 [editor.workbench]
 captions_hidden = "Los subtítulos están ocultos en la vista previa y en la exportación."

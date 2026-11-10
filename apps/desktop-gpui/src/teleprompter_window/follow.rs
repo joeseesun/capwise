@@ -3,12 +3,22 @@ use std::ops::Range;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::*;
+#[cfg(target_os = "macos")]
+mod macos;
+
+#[cfg(any(not(target_os = "macos"), test))]
+use crate::ai_store;
+#[cfg(not(target_os = "macos"))]
+use crate::ai_store::Kind;
+#[cfg(not(target_os = "macos"))]
+use crate::teleprompter_follow::{
+    self as core, AudioInput, BillingResource, FollowError, PcmChunk, StreamingConfig,
+};
 use crate::{
-    ai_store::{self, Kind},
     mic_tap::{MicPacket, MicTapEpoch, MicTapLease, MicTapStateKind, MicTapStatus},
     teleprompter_follow::{
-        self as core, AudioInput, BillingResource, FollowDecision, FollowError, FollowGeneration,
-        PcmChunk, RecognitionPacket, ScriptFollower, SessionEvent, StreamingConfig, StreamingEvent,
+        FollowDecision, FollowGeneration, RecognitionPacket, ScriptFollower, SessionEvent,
+        StreamingEvent,
     },
 };
 use tr::dialog::teleprompter::follow as copy;
@@ -23,11 +33,16 @@ enum PauseReason {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Failure {
+    #[cfg(any(not(target_os = "macos"), test))]
     MissingKey,
+    #[cfg(any(not(target_os = "macos"), test))]
     Endpoint,
     Microphone,
     Permission,
+    #[cfg(not(target_os = "macos"))]
     Network,
+    #[cfg(target_os = "macos")]
+    SpeechUnavailable,
     AudioLag,
     Service,
     Script,
@@ -44,6 +59,13 @@ enum FollowPhase {
     Failed(Failure),
 }
 
+pub(super) fn privacy_copy() -> &'static str {
+    #[cfg(target_os = "macos")]
+    return copy::apple_privacy();
+    #[cfg(not(target_os = "macos"))]
+    return copy::privacy();
+}
+
 impl FollowPhase {
     fn active(self) -> bool {
         matches!(self, Self::Connecting | Self::Listening)
@@ -51,19 +73,36 @@ impl FollowPhase {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Off => copy::privacy(),
+            Self::Off => privacy_copy(),
+            #[cfg(target_os = "macos")]
+            Self::Connecting => copy::apple_connecting(),
+            #[cfg(not(target_os = "macos"))]
             Self::Connecting => copy::connecting(),
             Self::Listening => copy::listening(),
+            #[cfg(target_os = "macos")]
+            Self::Paused(PauseReason::Manual) => copy::apple_manual(),
+            #[cfg(not(target_os = "macos"))]
             Self::Paused(PauseReason::Manual) => copy::manual(),
             Self::Paused(PauseReason::Recording) => copy::recording_paused(),
             Self::Paused(PauseReason::Muted) => copy::muted(),
             Self::Paused(PauseReason::Transition) => copy::transition(),
+            #[cfg(any(not(target_os = "macos"), test))]
             Self::Failed(Failure::MissingKey) => copy::key_missing(),
+            #[cfg(any(not(target_os = "macos"), test))]
             Self::Failed(Failure::Endpoint) => copy::endpoint(),
             Self::Failed(Failure::Microphone) => copy::microphone(),
+            #[cfg(target_os = "macos")]
+            Self::Failed(Failure::Permission) => copy::apple_permission(),
+            #[cfg(not(target_os = "macos"))]
             Self::Failed(Failure::Permission) => copy::permission(),
+            #[cfg(target_os = "macos")]
+            Self::Failed(Failure::SpeechUnavailable) => copy::apple_unavailable(),
+            #[cfg(not(target_os = "macos"))]
             Self::Failed(Failure::Network) => copy::network(),
             Self::Failed(Failure::AudioLag) => copy::audio_lag(),
+            #[cfg(target_os = "macos")]
+            Self::Failed(Failure::Service) => copy::apple_interrupted(),
+            #[cfg(not(target_os = "macos"))]
             Self::Failed(Failure::Service) => copy::service(),
             Self::Failed(Failure::Script) => copy::script(),
             Self::Failed(Failure::Layout) => copy::layout(),
@@ -103,6 +142,7 @@ impl FollowState {
     }
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn official_speech_endpoint(address: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(address.trim()) else {
         return false;
@@ -117,6 +157,7 @@ fn official_speech_endpoint(address: &str) -> bool {
         && url.fragment().is_none()
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn unchanged_official_endpoint(
     expected: &Option<ai_store::Endpoint>,
     current: &Option<ai_store::Endpoint>,
@@ -130,6 +171,7 @@ fn unchanged_official_endpoint(
         )
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn read_key_for_endpoint(
     expected: &Option<ai_store::Endpoint>,
     mut read_endpoint: impl FnMut() -> Option<ai_store::Endpoint>,
@@ -145,6 +187,7 @@ fn read_key_for_endpoint(
     key.ok_or(FollowPhase::Failed(Failure::MissingKey))
 }
 
+#[cfg(not(target_os = "macos"))]
 fn core_failure(error: FollowError) -> FollowPhase {
     match error {
         FollowError::InvalidKey | FollowError::Http { status: 401 | 403 } => {
@@ -210,6 +253,7 @@ async fn wait_for_microphone(
     }
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn upload_allowed(ready_at: Option<Instant>, captured_at: Instant, epoch_current: bool) -> bool {
     epoch_current && ready_at.is_some_and(|ready| captured_at >= ready)
 }
@@ -248,6 +292,7 @@ async fn discard_until<T, P>(
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 async fn drive_session(
     generation: FollowGeneration,
     endpoint: Option<ai_store::Endpoint>,
@@ -355,17 +400,21 @@ impl TeleprompterWindow {
     pub(super) fn start_follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.stop_follow();
         self.stop_playback();
-        let endpoint = ai_store::endpoint(Kind::Asr, "doubao");
-        if !official_speech_endpoint(
+        #[cfg(not(target_os = "macos"))]
+        let source = {
+            let endpoint = ai_store::endpoint(Kind::Asr, "doubao");
+            if !official_speech_endpoint(
+                endpoint
+                    .as_ref()
+                    .map(|endpoint| endpoint.base_url.as_str())
+                    .unwrap_or("https://openspeech.bytedance.com/api/v3"),
+            ) {
+                self.follow.phase = FollowPhase::Failed(Failure::Endpoint);
+                cx.notify();
+                return;
+            }
             endpoint
-                .as_ref()
-                .map(|endpoint| endpoint.base_url.as_str())
-                .unwrap_or("https://openspeech.bytedance.com/api/v3"),
-        ) {
-            self.follow.phase = FollowPhase::Failed(Failure::Endpoint);
-            cx.notify();
-            return;
-        }
+        };
         let Ok(mut follower) = ScriptFollower::new(&self.state.script) else {
             self.follow.phase = FollowPhase::Failed(Failure::Script);
             cx.notify();
@@ -386,6 +435,15 @@ impl TeleprompterWindow {
             cx.notify();
             return;
         }
+        #[cfg(target_os = "macos")]
+        let source = match macos::authorize(&self.state.script, offset) {
+            Ok(source) => source,
+            Err(phase) => {
+                self.follow.phase = phase;
+                cx.notify();
+                return;
+            }
+        };
         self.follow.selection = self.script_input.read(cx).selection();
         self.follow.follower = Some(follower);
         self.follow.phase = FollowPhase::Connecting;
@@ -397,11 +455,13 @@ impl TeleprompterWindow {
         let (cancel, cancelled) = oneshot::channel();
         self.follow.cancel = Some(cancel);
         let (updates, mut received) = mpsc::channel(16);
+        #[cfg(target_os = "macos")]
+        use macos::drive_session;
         let backend = gpui_tokio::Tokio::spawn(cx, async move {
             tokio::select! {
                 biased;
                 _ = cancelled => Err(FollowPhase::Paused(PauseReason::Manual)),
-                result = drive_session(generation, endpoint, status, packets, updates) => result,
+                result = drive_session(generation, source, status, packets, updates) => result,
             }
         });
         self.follow.task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -427,11 +487,15 @@ impl TeleprompterWindow {
                     return;
                 }
             }
+            #[cfg(target_os = "macos")]
+            let fallback = Failure::Service;
+            #[cfg(not(target_os = "macos"))]
+            let fallback = Failure::Network;
             let phase = backend
                 .await
                 .ok()
                 .and_then(Result::err)
-                .unwrap_or(FollowPhase::Failed(Failure::Network));
+                .unwrap_or(FollowPhase::Failed(fallback));
             let _ = this.update_in(cx, |this, window, cx| {
                 if !this.follow.accepts(generation) {
                     return;
@@ -459,9 +523,11 @@ impl TeleprompterWindow {
         };
         let mut offset = None;
         for update in packet.updates {
-            if let FollowDecision::Move(anchor) | FollowDecision::Follow(anchor) =
-                follower.update_for(generation, &update)
-            {
+            #[cfg(target_os = "macos")]
+            let decision = follower.update_spoken_for(generation, &update);
+            #[cfg(not(target_os = "macos"))]
+            let decision = follower.update_for(generation, &update);
+            if let FollowDecision::Move(anchor) | FollowDecision::Follow(anchor) = decision {
                 offset = Some(anchor.read_offset);
             }
         }
@@ -486,6 +552,8 @@ impl TeleprompterWindow {
         ) else {
             return;
         };
+        #[cfg(target_os = "macos")]
+        let position = self.position.max(position);
         self.position = position;
         self.apply_scroll();
         window.refresh();
@@ -500,6 +568,14 @@ impl TeleprompterWindow {
             return None;
         }
         let fix = match phase {
+            #[cfg(target_os = "macos")]
+            FollowPhase::Failed(Failure::Permission) => Some(
+                self.button("prompter-follow-settings", copy::settings())
+                    .on_click(|_, _, cx| {
+                        cx.open_url("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition");
+                    }),
+            ),
+            #[cfg(not(target_os = "macos"))]
             FollowPhase::Failed(Failure::MissingKey | Failure::Endpoint | Failure::Permission) => {
                 Some(self.button("prompter-follow-settings", copy::settings()).on_click(
                     |_, _, cx| {
