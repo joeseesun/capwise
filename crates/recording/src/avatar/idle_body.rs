@@ -12,44 +12,27 @@ pub(super) struct IdleBody {
 impl IdleBody {
     pub(super) fn new(kind: AvatarKind, original: &Pixmap) -> Option<Self> {
         let (index, costume_width, body_top, edge_y, neck): (_, _, _, _, &[[f32; 2]]) = match kind {
-            AvatarKind::BlueJacketPresenter => (
-                0,
-                0.92,
-                232.,
-                210.,
-                &[
-                    [126., 210.],
-                    [147., 216.],
-                    [155., 238.],
-                    [167., 251.],
-                    [194., 255.],
-                    [222., 251.],
-                    [239., 239.],
-                    [245., 216.],
-                    [265., 210.],
-                ],
-            ),
             AvatarKind::Raven => (
-                1,
+                0,
                 0.90,
-                236.,
+                214.,
                 201.,
                 &[
                     [91., 201.],
                     [115., 213.],
-                    [140., 226.],
-                    [153., 246.],
-                    [176., 267.],
-                    [201., 276.],
-                    [225., 267.],
-                    [240., 249.],
-                    [252., 227.],
+                    [140., 219.],
+                    [153., 231.],
+                    [176., 245.],
+                    [201., 251.],
+                    [225., 244.],
+                    [240., 232.],
+                    [252., 216.],
                     [271., 210.],
                     [291., 201.],
                 ],
             ),
             AvatarKind::RetroRobot => (
-                2,
+                1,
                 0.92,
                 251.,
                 220.,
@@ -63,42 +46,8 @@ impl IdleBody {
                     [232., 220.],
                 ],
             ),
-            AvatarKind::CurlyPresenter => (
-                3,
-                0.76,
-                400.,
-                363.,
-                &[
-                    [138., 363.],
-                    [165., 370.],
-                    [177., 400.],
-                    [186., 416.],
-                    [207., 425.],
-                    [231., 417.],
-                    [244., 395.],
-                    [256., 373.],
-                    [274., 363.],
-                ],
-            ),
-            AvatarKind::BlackSuitPresenter => (
-                4,
-                0.77,
-                397.,
-                362.,
-                &[
-                    [145., 362.],
-                    [173., 368.],
-                    [185., 390.],
-                    [198., 404.],
-                    [219., 409.],
-                    [241., 405.],
-                    [252., 391.],
-                    [268., 367.],
-                    [286., 362.],
-                ],
-            ),
             AvatarKind::SilverPresenter => (
-                5,
+                2,
                 0.78,
                 325.,
                 300.,
@@ -190,17 +139,16 @@ impl IdleBody {
     }
 }
 
-fn costumes() -> &'static [Pixmap; 6] {
-    static ATLAS: OnceLock<[Pixmap; 6]> = OnceLock::new();
+fn costumes() -> &'static [Pixmap; 3] {
+    static ATLAS: OnceLock<[Pixmap; 3]> = OnceLock::new();
     ATLAS.get_or_init(|| {
         let atlas = Pixmap::decode_png(include_bytes!("art/relaxed-costumes.png"))
             .expect("valid relaxed avatar artwork");
         let width = atlas.width() / 3;
-        let height = atlas.height() / 2;
+        let height = atlas.height();
         std::array::from_fn(|index| {
-            let x = index as u32 % 3 * width;
-            let y = index as u32 / 3 * height;
-            let cell = IntRect::from_xywh(x as i32, y as i32, width, height).expect("costume tile");
+            let x = index as u32 * width;
+            let cell = IntRect::from_xywh(x as i32, 0, width, height).expect("costume tile");
             let sprite = atlas.clone_rect(cell).expect("costume within atlas");
             trim(sprite)
         })
@@ -245,11 +193,8 @@ mod tests {
     #[test]
     fn split_shoulders_only_use_the_costume_plate() {
         let cases = [
-            (AvatarKind::BlueJacketPresenter, 388, 605, 239, 209),
             (AvatarKind::Raven, 382, 605, 244, 196),
             (AvatarKind::RetroRobot, 387, 605, 262, 211),
-            (AvatarKind::CurlyPresenter, 437, 670, 416, 363),
-            (AvatarKind::BlackSuitPresenter, 441, 670, 404, 359),
             (AvatarKind::SilverPresenter, 694, 800, 341, 294),
         ];
         for (kind, width, height, shoulder_y, neck_y) in cases {

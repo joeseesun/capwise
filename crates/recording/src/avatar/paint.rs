@@ -12,14 +12,14 @@ impl Portrait {
         }
     }
 
-    fn shape(&mut self, path: tiny_skia::Path, color: u32, transform: Transform) {
+    pub(super) fn shape(&mut self, path: tiny_skia::Path, color: u32, transform: Transform) {
         let mut paint = Paint::default();
         paint.set_color_rgba8((color >> 16) as u8, (color >> 8) as u8, color as u8, 255);
         self.pixels
             .fill_path(&path, &paint, FillRule::Winding, transform, None);
     }
 
-    fn oval(&mut self, bounds: [f32; 4], color: u32, transform: Transform) {
+    pub(super) fn oval(&mut self, bounds: [f32; 4], color: u32, transform: Transform) {
         if let Some(rect) = tiny_skia::Rect::from_xywh(bounds[0], bounds[1], bounds[2], bounds[3])
             && let Some(path) = PathBuilder::from_oval(rect)
         {
@@ -27,7 +27,7 @@ impl Portrait {
         }
     }
 
-    fn curve(&mut self, points: [f32; 6], color: u32, width: f32, transform: Transform) {
+    pub(super) fn curve(&mut self, points: [f32; 6], color: u32, width: f32, transform: Transform) {
         let mut path = PathBuilder::new();
         path.move_to(points[0], points[1]);
         path.quad_to(points[2], points[3], points[4], points[5]);
@@ -61,6 +61,10 @@ impl Portrait {
 
     pub fn draw(&mut self, kind: AvatarKind, pose: Pose, elapsed: f32, split: bool) {
         if super::illustrated::draw(&mut self.pixels, kind, pose, split) {
+            return;
+        }
+        if kind == AvatarKind::Cat {
+            self.draw_cat(pose, elapsed, split);
             return;
         }
         let (fur, dark, background, shirt) = match kind {
@@ -193,12 +197,6 @@ impl Portrait {
                 0xd99596,
                 face,
             );
-        }
-        if kind == AvatarKind::Cat {
-            for (x, dx) in [(239., -55.), (401., 55.)] {
-                self.curve([x, 373., x + dx * 0.5, 367., x + dx, 365.], dark, 3., head);
-                self.curve([x, 386., x + dx * 0.5, 390., x + dx, 398.], dark, 3., head);
-            }
         }
     }
 }

@@ -6,6 +6,8 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::AvatarWorker;
 #[cfg(any(target_os = "macos", test))]
+mod cat;
+#[cfg(any(target_os = "macos", test))]
 mod idle_body;
 #[cfg(any(target_os = "macos", test))]
 mod illustrated;
@@ -30,15 +32,17 @@ pub enum AvatarKind {
     Bear = 2,
     Fox = 3,
     Raven = 4,
+    #[serde(
+        alias = "curlyPresenter",
+        alias = "blackSuitPresenter",
+        alias = "blueJacketPresenter"
+    )]
     RetroRobot = 5,
     SilverPresenter = 6,
-    CurlyPresenter = 7,
-    BlackSuitPresenter = 8,
-    BlueJacketPresenter = 9,
 }
 
 impl AvatarKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 7] = [
         Self::Camera,
         Self::Cat,
         Self::Bear,
@@ -46,21 +50,10 @@ impl AvatarKind {
         Self::Raven,
         Self::RetroRobot,
         Self::SilverPresenter,
-        Self::CurlyPresenter,
-        Self::BlackSuitPresenter,
-        Self::BlueJacketPresenter,
     ];
 
     pub fn uses_illustration(self) -> bool {
-        matches!(
-            self,
-            Self::Raven
-                | Self::RetroRobot
-                | Self::SilverPresenter
-                | Self::CurlyPresenter
-                | Self::BlackSuitPresenter
-                | Self::BlueJacketPresenter
-        )
+        matches!(self, Self::Raven | Self::RetroRobot | Self::SilverPresenter)
     }
 }
 
@@ -177,6 +170,19 @@ mod tests {
         control.set(AvatarKind::Cat);
         assert_eq!(control.kind(), AvatarKind::Cat);
         assert_ne!(first, control.snapshot());
+    }
+
+    #[test]
+    fn retired_avatars_restore_to_a_virtual_character() {
+        for saved in [
+            "\"curlyPresenter\"",
+            "\"blackSuitPresenter\"",
+            "\"blueJacketPresenter\"",
+        ] {
+            let avatar = serde_json::from_str::<AvatarKind>(saved).unwrap();
+            assert_eq!(avatar, AvatarKind::RetroRobot);
+            assert_eq!(serde_json::to_string(&avatar).unwrap(), "\"retroRobot\"");
+        }
     }
 
     #[test]

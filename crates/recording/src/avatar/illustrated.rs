@@ -29,37 +29,32 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
     static RAVEN: OnceLock<Artwork> = OnceLock::new();
     static ROBOT: OnceLock<Artwork> = OnceLock::new();
     static SILVER: OnceLock<Artwork> = OnceLock::new();
-    static CURLY: OnceLock<Artwork> = OnceLock::new();
-    static BLACK_SUIT: OnceLock<Artwork> = OnceLock::new();
-    static BLUE_JACKET: OnceLock<Artwork> = OnceLock::new();
 
     let illustrated = include_bytes!("art/illustrated.png").as_slice();
     let illustrated_expression = include_bytes!("art/illustrated-expression.png").as_slice();
-    let presenters = include_bytes!("art/presenters.png").as_slice();
-    let presenters_expression = include_bytes!("art/presenters-expression.png").as_slice();
     let (cache, neutral, expression, split, bubble, eyes, gaze, mouth, head, neck_y) = match kind {
         AvatarKind::Raven => (
             &RAVEN,
             illustrated,
             illustrated_expression,
-            [578, 45, 382, 605],
-            [601, 47, 347, 347],
-            [[720, 133, 58, 35], [806, 133, 40, 35]],
+            [18, 45, 382, 605],
+            [41, 47, 347, 347],
+            [[160, 133, 58, 35], [246, 133, 40, 35]],
             [0., 0.],
-            [742, 176, 125, 57],
-            [646, 64, 213, 204],
-            298,
+            [182, 176, 125, 57],
+            [86, 64, 213, 204],
+            280,
         ),
         AvatarKind::RetroRobot => (
             &ROBOT,
             illustrated,
             illustrated_expression,
-            [1051, 45, 387, 605],
-            [1062, 51, 368, 368],
-            [[1182, 159, 51, 32], [1261, 159, 49, 32]],
+            [491, 45, 387, 605],
+            [502, 51, 368, 368],
+            [[622, 159, 51, 32], [701, 159, 49, 32]],
             [0., 0.],
-            [1213, 201, 69, 28],
-            [1131, 101, 226, 153],
+            [653, 201, 69, 28],
+            [571, 101, 226, 153],
             295,
         ),
         AvatarKind::SilverPresenter => (
@@ -73,42 +68,6 @@ fn artwork(kind: AvatarKind) -> Option<&'static Artwork> {
             [425, 398, 92, 38],
             [353, 195, 235, 278],
             517,
-        ),
-        AvatarKind::CurlyPresenter => (
-            &CURLY,
-            presenters,
-            presenters_expression,
-            [166, 4, 437, 670],
-            [179, 4, 403, 403],
-            [[315, 197, 64, 56], [402, 197, 65, 55]],
-            [-4., 4.],
-            [326, 294, 126, 47],
-            [210, 25, 320, 358],
-            424,
-        ),
-        AvatarKind::BlackSuitPresenter => (
-            &BLACK_SUIT,
-            presenters,
-            presenters_expression,
-            [903, 4, 441, 670],
-            [927, 4, 394, 394],
-            [[1041, 191, 66, 57], [1134, 190, 66, 57]],
-            [-4., 4.],
-            [1054, 290, 135, 50],
-            [973, 28, 300, 355],
-            424,
-        ),
-        AvatarKind::BlueJacketPresenter => (
-            &BLUE_JACKET,
-            illustrated,
-            illustrated_expression,
-            [96, 45, 388, 605],
-            [116, 47, 350, 350],
-            [[250, 154, 43, 27], [306, 153, 40, 27]],
-            [0., 0.],
-            [274, 204, 54, 29],
-            [194, 62, 197, 193],
-            284,
         ),
         _ => return None,
     };
@@ -269,9 +228,9 @@ pub(super) fn draw(target: &mut Pixmap, kind: AvatarKind, pose: Pose, split: boo
         let closed = ((0.52 - opening) / 0.41).clamp(0., 1.);
         blend(&artwork.expression, &mut frame, eye, closed, true);
     }
-    let split_body = split.then_some(&artwork.idle_body);
+    let costume = (split || kind == AvatarKind::Raven).then_some(&artwork.idle_body);
     let frame = if let Some(layers) = &artwork.layers {
-        layers.draw(frame, pose, split_body)
+        layers.draw(frame, pose, costume)
     } else {
         let speaking = ((pose.mouth - 0.025) / 0.56).clamp(0., 1.);
         blend(
@@ -283,7 +242,7 @@ pub(super) fn draw(target: &mut Pixmap, kind: AvatarKind, pose: Pose, split: boo
         );
         shape_mouth(&mut frame, artwork.mouth, pose);
         let frame = artwork.head.render(frame, pose);
-        if let Some(body) = split_body {
+        if let Some(body) = costume {
             body.draw(&frame)
         } else {
             frame

@@ -2837,7 +2837,7 @@ impl CameraWindow {
             )
     }
 
-    fn avatar_choices(&self) -> [cap_recording::avatar::AvatarKind; 8] {
+    fn avatar_choices(&self) -> [cap_recording::avatar::AvatarKind; 5] {
         use cap_recording::avatar::AvatarKind;
         let legacy = match self.avatar {
             AvatarKind::Bear | AvatarKind::Fox => self.avatar,
@@ -2846,10 +2846,7 @@ impl CameraWindow {
         [
             AvatarKind::Camera,
             AvatarKind::RetroRobot,
-            AvatarKind::BlueJacketPresenter,
             AvatarKind::SilverPresenter,
-            AvatarKind::CurlyPresenter,
-            AvatarKind::BlackSuitPresenter,
             AvatarKind::Raven,
             legacy,
         ]
@@ -2868,9 +2865,6 @@ impl CameraWindow {
                     AvatarKind::Raven => tr::camera::avatar::raven(),
                     AvatarKind::RetroRobot => tr::camera::avatar::retro_robot(),
                     AvatarKind::SilverPresenter => tr::camera::avatar::silver_presenter(),
-                    AvatarKind::CurlyPresenter => tr::camera::avatar::curly_presenter(),
-                    AvatarKind::BlackSuitPresenter => tr::camera::avatar::black_suit_presenter(),
-                    AvatarKind::BlueJacketPresenter => tr::camera::avatar::blue_jacket_presenter(),
                 };
                 ui::MenuItem::new(label, self.avatar == kind)
             })
