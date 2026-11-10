@@ -3859,6 +3859,13 @@ apple_permission = "Permite que Capwise use el reconocimiento de voz en Ajustes 
 apple_unavailable = "El reconocimiento de voz local no está disponible para este idioma o Mac."
 apple_interrupted = "Se interrumpió el reconocimiento de voz. Selecciona el botón del micrófono para reintentar."
 apple_manual = "El seguimiento por voz está en pausa. Puedes desplazarte manualmente."
+waiting = "Listo para seguir tu voz"
+pause_action = "Pausar"
+start_action = "Iniciar el seguimiento por voz"
+scroll_action = "Iniciar el desplazamiento"
+previous_sentence = "Frase anterior"
+next_sentence = "Frase siguiente"
+scroll_mode = "Modo de desplazamiento"
 
 [editor.workbench]
 captions_hidden = "Los subtítulos están ocultos en la vista previa y en la exportación."

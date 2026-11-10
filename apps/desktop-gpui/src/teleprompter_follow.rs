@@ -994,6 +994,17 @@ impl ScriptFollower {
             .unwrap_or(self.sentences.len() - 1)
     }
 
+    pub fn adjacent_sentence_offset(&self, offset: usize, direction: isize) -> Option<usize> {
+        let index = self
+            .sentence_at_byte(offset)
+            .checked_add_signed(direction)?;
+        self.sentences
+            .get(index)?
+            .tokens
+            .first()
+            .map(|token| token.bytes.start)
+    }
+
     pub fn current_sentence(&self) -> usize {
         self.current
     }
@@ -1023,6 +1034,82 @@ impl ScriptFollower {
             self.speech_offset = None;
         }
         Ok(())
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    fn recover_spoken_position(
+        &mut self,
+        spoken: &[ScriptToken],
+        update: &RecognitionUpdate,
+    ) -> FollowDecision {
+        const ANCHOR_LENGTH: usize = 6;
+        let Some(suffix) = spoken
+            .get(spoken.len().saturating_sub(ANCHOR_LENGTH)..)
+            .filter(|suffix| suffix.len() == ANCHOR_LENGTH)
+        else {
+            self.speech_candidate = None;
+            return FollowDecision::Stay(StayReason::Unmatched);
+        };
+        let mut matches = self
+            .sentences
+            .iter()
+            .enumerate()
+            .flat_map(|(index, sentence)| {
+                sentence
+                    .tokens
+                    .windows(ANCHOR_LENGTH)
+                    .filter_map(move |window| {
+                        window
+                            .iter()
+                            .zip(suffix)
+                            .all(|(expected, heard)| expected.value == heard.value)
+                            .then(|| ScriptAnchor {
+                                sentence: index,
+                                bytes: sentence.bytes.clone(),
+                                confidence: 1.,
+                                read_offset: window[ANCHOR_LENGTH - 1].bytes.start,
+                            })
+                    })
+            });
+        let Some(anchor) = matches
+            .next()
+            .filter(|anchor| anchor.sentence > self.current + 2)
+        else {
+            self.speech_candidate = None;
+            return FollowDecision::Stay(StayReason::Unmatched);
+        };
+        if matches.next().is_some() {
+            self.speech_candidate = None;
+            return FollowDecision::Stay(StayReason::Ambiguous);
+        }
+
+        let now = Instant::now();
+        let previous = self.speech_candidate.take().filter(|candidate| {
+            candidate.sentence > self.current + 2
+                && anchor.sentence >= candidate.sentence
+                && anchor.sentence <= candidate.sentence + 1
+                && candidate.task_start_ms == update.start_ms
+                && candidate.read_offset <= anchor.read_offset
+        });
+        let since = previous.as_ref().map_or(now, |candidate| candidate.since);
+        let confirmed = previous.is_some_and(|candidate| {
+            candidate.read_offset < anchor.read_offset
+                && now.saturating_duration_since(since) >= Duration::from_millis(180)
+        });
+        if confirmed {
+            self.current = anchor.sentence;
+            self.speech_offset = Some(anchor.read_offset);
+            FollowDecision::Move(anchor)
+        } else {
+            self.speech_candidate = Some(SpeechCandidate {
+                sentence: anchor.sentence,
+                read_offset: anchor.read_offset,
+                text: update.text.clone(),
+                task_start_ms: update.start_ms,
+                since,
+            });
+            FollowDecision::Candidate(anchor)
+        }
     }
 
     #[cfg(any(target_os = "macos", test))]
@@ -1075,8 +1162,7 @@ impl ScriptFollower {
             }
         }
         let Some((_, anchor)) = best else {
-            self.speech_candidate = None;
-            return FollowDecision::Stay(StayReason::Unmatched);
+            return self.recover_spoken_position(&spoken, update);
         };
         if ambiguous {
             self.speech_candidate = None;
@@ -1345,6 +1431,54 @@ mod tests {
             ),
             FollowDecision::Stay(StayReason::Unmatched)
         );
+    }
+
+    #[test]
+    fn sentence_navigation_starts_at_the_first_readable_character() {
+        let text = "第一句。  第二句！\n  Third sentence.";
+        let follower = ScriptFollower::new(text).unwrap();
+        let second = follower.adjacent_sentence_offset(0, 1).unwrap();
+        let third = follower.adjacent_sentence_offset(second, 1).unwrap();
+        assert!(text[second..].starts_with("第二句"));
+        assert!(text[third..].starts_with("Third"));
+        assert_eq!(follower.adjacent_sentence_offset(third, -1), Some(second));
+        assert_eq!(follower.adjacent_sentence_offset(third, 1), None);
+        assert_eq!(follower.adjacent_sentence_offset(0, -1), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn apple_speech_requires_two_forward_anchors_to_recover_from_a_skip() {
+        let mut follower = ScriptFollower::new(script()).unwrap();
+        follower.begin_session(GENERATION).unwrap();
+        let first = update(0, "录制结束生成", false);
+        assert!(matches!(
+            follower.update_spoken_for(GENERATION, &first),
+            FollowDecision::Candidate(ScriptAnchor { sentence: 6, .. })
+        ));
+        tokio::time::advance(Duration::from_millis(200)).await;
+        assert!(matches!(
+            follower.update_spoken_for(GENERATION, &first),
+            FollowDecision::Candidate(_)
+        ));
+        assert_eq!(follower.current_sentence(), 0);
+        assert!(matches!(
+            follower.update_spoken_for(GENERATION, &update(0, "录制结束生成字幕", false)),
+            FollowDecision::Move(ScriptAnchor { sentence: 6, .. })
+        ));
+    }
+
+    #[test]
+    fn apple_speech_cannot_recover_to_a_repeated_phrase() {
+        let mut follower = ScriptFollower::new(
+            "先整理桌面。打开录制选项。然后试试麦克风。接下来导出一段视频。接下来导出一段视频。",
+        )
+        .unwrap();
+        follower.begin_session(GENERATION).unwrap();
+        assert_eq!(
+            follower.update_spoken_for(GENERATION, &update(0, "接下来导出一段视频", false)),
+            FollowDecision::Stay(StayReason::Ambiguous)
+        );
+        assert_eq!(follower.current_sentence(), 0);
     }
 
     fn server_packet(flags: u8, sequence: Option<i32>, body: serde_json::Value) -> Vec<u8> {

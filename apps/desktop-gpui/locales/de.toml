@@ -3859,6 +3859,13 @@ apple_permission = "Erlauben Sie Capwise die Spracherkennung in den Systemeinste
 apple_unavailable = "Die lokale Spracherkennung ist für diese Sprache oder diesen Mac nicht verfügbar."
 apple_interrupted = "Die Spracherkennung wurde unterbrochen. Wählen Sie die Mikrofontaste, um es erneut zu versuchen."
 apple_manual = "Die Sprachverfolgung pausiert für manuelles Scrollen."
+waiting = "Bereit zum Vorlesen"
+pause_action = "Pausieren"
+start_action = "Sprachverfolgung starten"
+scroll_action = "Scrollen starten"
+previous_sentence = "Vorheriger Satz"
+next_sentence = "Nächster Satz"
+scroll_mode = "Scrollmodus"
 
 [editor.workbench]
 captions_hidden = "Untertitel sind in der Vorschau und im Export ausgeblendet."

@@ -527,6 +527,7 @@ impl RenderOnce for Button {
 pub struct IconButton {
     id: ElementId,
     icon: SharedString,
+    accessible_name: Option<SharedString>,
     size: Pixels,
     icon_size: Pixels,
     idle: Hsla,
@@ -548,6 +549,7 @@ impl IconButton {
         Self {
             id: id.into(),
             icon: icon.into(),
+            accessible_name: None,
             size: px(28.),
             icon_size: px(14.),
             idle: gpui::white(),
@@ -601,6 +603,11 @@ impl IconButton {
             active_bg: Some(theme.body_fill(5)),
             ..Self::new(id, icon)
         }
+    }
+
+    pub fn accessible_name(mut self, name: impl Into<SharedString>) -> Self {
+        self.accessible_name = Some(name.into());
+        self
     }
 
     pub fn size(mut self, size: Pixels) -> Self {
@@ -661,6 +668,7 @@ impl RenderOnce for IconButton {
         let IconButton {
             id,
             icon,
+            accessible_name,
             size,
             icon_size,
             idle,
@@ -679,6 +687,9 @@ impl RenderOnce for IconButton {
 
         div()
             .id(id)
+            .when_some(accessible_name, |this, name| {
+                this.role(gpui::Role::Button).aria_label(name)
+            })
             .when(occlude, |this| this.occlude())
             .tab_index(0)
             .tab_stop(!disabled)
