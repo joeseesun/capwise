@@ -660,6 +660,17 @@ const QUICK_CAPTION_PRESETS: [QuickCaptionPreset; 4] = [
 
 impl QuickCaptionPreset {
     fn apply(&self, settings: &mut CaptionSettings) {
+        if let Some(template) = BILINGUAL_CAPTION_PRESETS
+            .iter()
+            .find(|preset| preset.id == settings.preset)
+            .and_then(|preset| preset.template)
+        {
+            let mut defaults = CaptionSettings::default();
+            template.apply(&mut defaults);
+            if settings.translation_appearance == defaults.translation_appearance {
+                settings.translation_appearance = None;
+            }
+        }
         settings.preset = self.id.to_string();
         settings.font_weight = 700;
         settings.color = self.color.to_string();
@@ -5589,6 +5600,32 @@ mod tests {
             QUICK_CAPTION_PRESETS[0].outline_color,
             QUICK_CAPTION_PRESETS[1].outline_color
         );
+    }
+
+    #[test]
+    fn legacy_quick_styles_keep_bilingual_text_readable_after_new_templates() {
+        let light_background = QUICK_CAPTION_PRESETS
+            .iter()
+            .find(|preset| preset.id == "light-background")
+            .unwrap();
+        for template in BILINGUAL_CAPTION_PRESETS {
+            let mut settings = CaptionSettings::default();
+            template.apply(&mut settings);
+            let translation = settings.resolved_translation_style();
+            light_background.apply(&mut settings);
+            assert_eq!(
+                settings.resolved_translation_appearance().color,
+                light_background.color
+            );
+            assert_eq!(settings.resolved_translation_style(), translation);
+
+            template.apply(&mut settings);
+            settings.edit_translation_appearance(|appearance| {
+                appearance.color = "#0455AD".into();
+            });
+            light_background.apply(&mut settings);
+            assert_eq!(settings.resolved_translation_appearance().color, "#0455AD");
+        }
     }
 
     #[test]
