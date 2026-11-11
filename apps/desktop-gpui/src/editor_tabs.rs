@@ -463,7 +463,6 @@ impl CaptionPreset {
             template.apply(settings);
             return;
         }
-        settings.background_mode = Default::default();
         settings.set_source_font_size(self.size);
         settings.preset = self.id.to_string();
         settings.font_weight = self.font_weight;
@@ -661,7 +660,6 @@ const QUICK_CAPTION_PRESETS: [QuickCaptionPreset; 4] = [
 
 impl QuickCaptionPreset {
     fn apply(&self, settings: &mut CaptionSettings) {
-        settings.background_mode = Default::default();
         settings.preset = self.id.to_string();
         settings.font_weight = 700;
         settings.color = self.color.to_string();
@@ -4357,6 +4355,7 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(10.))
+            .child(choices)
             .child(self.render_caption_presets(settings, BILINGUAL_CAPTION_PRESETS, cx))
             .child(crate::editor_sidebar::disclosure_row(
                 &theme,
@@ -4368,14 +4367,11 @@ impl EditorWindow {
                     this.invalidate_sidebar(cx);
                 }),
             ))
-            .children(self.sidebar.caption_more_styles.then(|| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(choices)
-                    .child(self.render_caption_presets(settings, CAPTION_PRESETS, cx))
-            }))
+            .children(
+                self.sidebar
+                    .caption_more_styles
+                    .then(|| self.render_caption_presets(settings, CAPTION_PRESETS, cx)),
+            )
             .child(
                 div()
                     .flex()
@@ -4526,31 +4522,16 @@ impl EditorWindow {
                                 px((f32::from(bounds.size.width) - layout.width) / 2.),
                                 px((f32::from(bounds.size.height) - layout.height) / 2.),
                             );
-                        if settings.background_mode
-                            == cap_project::CaptionBackgroundMode::EdgeGradient
-                        {
-                            let mut transparent = background;
-                            transparent.a = 0.;
-                            window.paint_quad(gpui::fill(
-                                bounds,
-                                gpui::linear_gradient(
-                                    180.,
-                                    gpui::linear_color_stop(transparent, 0.),
-                                    gpui::linear_color_stop(background, 0.9),
+                        window.paint_quad(
+                            gpui::fill(
+                                Bounds::new(
+                                    origin,
+                                    gpui::size(px(layout.width), px(layout.height)),
                                 ),
-                            ));
-                        } else {
-                            window.paint_quad(
-                                gpui::fill(
-                                    Bounds::new(
-                                        origin,
-                                        gpui::size(px(layout.width), px(layout.height)),
-                                    ),
-                                    background,
-                                )
-                                .corner_radii(px(layout.radius)),
-                            );
-                        }
+                                background,
+                            )
+                            .corner_radii(px(layout.radius)),
+                        );
                         let mut top = origin.y + px(layout.padding);
                         for (index, line) in lines.iter().enumerate() {
                             let appearance = &line.appearance;

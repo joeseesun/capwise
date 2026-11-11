@@ -2602,11 +2602,11 @@ qwen_description = "चन वरन क लए · सनय रप स चल�
 
 [editor.tabs.captions.preset]
 screen_recording = "स्क्रीन रिकॉर्डिंग"
-screen_recording_description = "पारदर्शी गोलाकार पृष्ठभूमि पर सैंस-सेरिफ़ उपशीर्षक"
+screen_recording_description = "पतली आउटलाइन के साथ Noto Sans SC और Inter"
 tech_tutorial = "तकनीकी ट्यूटोरियल"
-tech_tutorial_description = "किनारे की ओर ग्रेडिएंट के साथ स्पष्ट सैंस-सेरिफ़ उपशीर्षक"
+tech_tutorial_description = "ज़्यादा स्पष्ट आउटलाइन के साथ Sarasa Gothic SC और Montserrat"
 documentary = "डॉक्यूमेंट्री"
-documentary_description = "पारदर्शी गोलाकार पृष्ठभूमि पर सेरिफ़ उपशीर्षक"
+documentary_description = "पतली आउटलाइन के साथ Noto Serif SC और Source Serif 4"
 dark_background = "हल्की काली पृष्ठभूमि"
 light_background = "साफ़ सफ़ेद पृष्ठभूमि"
 classic = "हल्की काली पृष्ठभूमि"

@@ -2898,20 +2898,6 @@ impl CaptionAppearance {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum CaptionBackgroundMode {
-    #[default]
-    RoundedBox,
-    EdgeGradient,
-}
-
-impl CaptionBackgroundMode {
-    fn is_rounded_box(&self) -> bool {
-        *self == Self::RoundedBox
-    }
-}
-
 #[derive(Clone, Copy)]
 pub enum CaptionTemplate {
     ScreenRecording,
@@ -2929,28 +2915,10 @@ impl CaptionTemplate {
     }
 
     pub fn apply(self, settings: &mut CaptionSettings) {
-        let (source, translation, outline, opacity, background_mode) = match self {
-            Self::ScreenRecording => (
-                ("Noto Sans SC", 44, 700),
-                ("Inter", 34, 500),
-                3.5,
-                60,
-                CaptionBackgroundMode::RoundedBox,
-            ),
-            Self::TechTutorial => (
-                ("Sarasa Gothic SC", 44, 700),
-                ("Montserrat", 34, 500),
-                4.0,
-                78,
-                CaptionBackgroundMode::EdgeGradient,
-            ),
-            Self::Documentary => (
-                ("Noto Serif SC", 46, 500),
-                ("Source Serif 4", 35, 600),
-                1.6,
-                66,
-                CaptionBackgroundMode::RoundedBox,
-            ),
+        let (source, translation, outline) = match self {
+            Self::ScreenRecording => (("Noto Sans SC", 44, 700), ("Inter", 34, 500), 3.5),
+            Self::TechTutorial => (("Sarasa Gothic SC", 44, 700), ("Montserrat", 34, 500), 4.0),
+            Self::Documentary => (("Noto Serif SC", 46, 500), ("Source Serif 4", 35, 600), 2.8),
         };
         let appearance = CaptionAppearance {
             color: "#FFFFFF".into(),
@@ -2972,9 +2940,7 @@ impl CaptionTemplate {
             font_weight: translation.2,
             ..appearance
         });
-        settings.background_mode = background_mode;
-        settings.background_color = "#111111".into();
-        settings.background_opacity = opacity;
+        settings.background_opacity = 0;
         settings.translation_gap = Some(8);
         settings.bottom_margin = Some(76);
         settings.italic = false;
@@ -3008,8 +2974,6 @@ pub struct CaptionSettings {
     pub background_color: String,
     #[serde(alias = "backgroundOpacity")]
     pub background_opacity: u32,
-    #[serde(skip_serializing_if = "CaptionBackgroundMode::is_rounded_box")]
-    pub background_mode: CaptionBackgroundMode,
     pub position: String,
     pub italic: bool,
     #[serde(alias = "fontWeight")]
@@ -3213,7 +3177,6 @@ impl Default for CaptionSettings {
             color: "#FFFFFF".to_string(),
             background_color: "#000000".to_string(),
             background_opacity: 90,
-            background_mode: CaptionBackgroundMode::RoundedBox,
             position: "bottom-center".to_string(),
             italic: false,
             font_weight: Self::default_font_weight(),

@@ -68,6 +68,7 @@ fn editing_source_size_first_preserves_translation_font_and_size() {
     let mut settings = source();
     settings.set_source_font_size(60);
     assert_eq!(settings.font, "Noto Sans SC");
+    assert_eq!(settings.background_opacity, 0);
     assert_eq!(settings.size, 60);
     assert_eq!(
         settings.resolved_translation_style(),
@@ -260,12 +261,12 @@ fn source_size_changes_preserve_translation_outline_size() {
 
 #[test]
 fn caption_templates_preserve_content_and_legacy_defaults() {
-    use crate::{CaptionBackgroundMode, CaptionTemplate};
+    use crate::CaptionTemplate;
 
     let legacy: CaptionSettings = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
     assert_eq!(legacy.preset, "classic");
     assert_eq!(legacy.size, 24);
-    assert_eq!(legacy.background_mode, CaptionBackgroundMode::RoundedBox);
+    assert_eq!(legacy.background_opacity, 90);
 
     let mut settings = CaptionSettings::for_new_captions();
     assert_eq!(settings.preset, "screen-recording");
@@ -278,10 +279,7 @@ fn caption_templates_preserve_content_and_legacy_defaults() {
     CaptionTemplate::TechTutorial.apply(&mut settings);
     let saved = serde_json::to_string(&settings).unwrap();
     let restored: CaptionSettings = serde_json::from_str(&saved).unwrap();
-    assert_eq!(
-        restored.background_mode,
-        CaptionBackgroundMode::EdgeGradient
-    );
+    assert_eq!(restored.background_opacity, 0);
     assert_eq!(restored.translations, settings.translations);
     assert_eq!(restored.display_mode, crate::CaptionDisplayMode::Bilingual);
     assert!(restored.enabled && restored.export_with_subtitles);

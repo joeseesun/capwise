@@ -769,7 +769,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::editor::tabs::captions::preset::screen_recording_description(),
-            "Sans-serif subtitles on a translucent rounded background",
+            "Noto Sans SC and Inter with a fine outline",
         ),
         (
             tr::editor::tabs::captions::preset::tech_tutorial(),
@@ -777,7 +777,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::editor::tabs::captions::preset::tech_tutorial_description(),
-            "Crisp sans-serif subtitles over an edge gradient",
+            "Sarasa Gothic SC and Montserrat with a sharper outline",
         ),
         (
             tr::editor::tabs::captions::preset::documentary(),
@@ -785,7 +785,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::editor::tabs::captions::preset::documentary_description(),
-            "Serif subtitles on a translucent rounded background",
+            "Noto Serif SC and Source Serif 4 with a fine outline",
         ),
         (
             tr::editor::tabs::captions::preset::classic(),

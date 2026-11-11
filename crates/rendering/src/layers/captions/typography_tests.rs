@@ -610,8 +610,8 @@ fn independent_caption_appearance_renders_source_and_translation_without_cache_c
 }
 
 #[test]
-fn bundled_bilingual_templates_render_the_selected_faces_and_backgrounds() {
-    use cap_project::{CaptionBackgroundMode, CaptionTemplate};
+fn bundled_bilingual_templates_render_the_selected_faces_without_backgrounds() {
+    use cap_project::CaptionTemplate;
 
     let size = XY::new(640, 480);
     let constants = constants(size);
@@ -642,24 +642,21 @@ fn bundled_bilingual_templates_render_the_selected_faces_and_backgrounds() {
     ] {
         layer.font_system.db_mut().load_font_data(bytes.to_vec());
     }
-    for (template, source, translation, edge_alpha) in [
+    for (template, source, translation) in [
         (
             CaptionTemplate::ScreenRecording,
             ("Noto Sans SC", Weight::BOLD),
             ("Inter", Weight::MEDIUM),
-            0,
         ),
         (
             CaptionTemplate::TechTutorial,
             ("Sarasa Gothic SC", Weight::BOLD),
             ("Montserrat", Weight::MEDIUM),
-            199,
         ),
         (
             CaptionTemplate::Documentary,
             ("Noto Serif SC", Weight::MEDIUM),
             ("Source Serif 4", Weight::SEMIBOLD),
-            0,
         ),
     ] {
         template.apply(&mut settings);
@@ -684,9 +681,8 @@ fn bundled_bilingual_templates_render_the_selected_faces_and_backgrounds() {
         }
         let alpha = |x: u32, y: u32| pixels[((y * size.x + x) * 4 + 3) as usize];
         assert_eq!(alpha(2, 2), 0);
-        assert!(alpha(2, size.y - 2).abs_diff(edge_alpha) <= 1);
-        if settings.background_mode == CaptionBackgroundMode::EdgeGradient {
-            assert!(alpha(2, 380) > 0 && alpha(2, 380) < edge_alpha);
-        }
+        assert_eq!(alpha(2, size.y - 2), 0);
+        let [left, top, _, _] = layer.active_layout().unwrap().rect;
+        assert_eq!(alpha(left as u32 + 5, top as u32 + 5), 0);
     }
 }
