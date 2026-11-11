@@ -110,6 +110,14 @@ fn messages_follow_the_language() {
     init(Some(Locale::Ja.code()));
     assert_eq!(localize("Recording task failed."), "録画タスクが失敗しました。");
     assert_eq!(
+        localize("Selected microphone 'USB: Studio' is unavailable: DeviceNotFound"),
+        "選択したマイク「USB: Studio」を使用できません。接続し直すか、別のマイクを選択してください。\nDeviceNotFound"
+    );
+    assert_eq!(
+        localize("Selected camera is unavailable: DeviceNotFound"),
+        "選択したカメラを使用できません。接続し直すか、別のカメラを選択してください。\nDeviceNotFound"
+    );
+    assert_eq!(
         localize(
             "Stop task failed: Recording startup cancelled; local files preserved. Capture cleanup is unconfirmed. Use Ctrl+Shift+F9 to retry Stop."
         ),

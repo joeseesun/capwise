@@ -5457,7 +5457,8 @@ mod tests {
     /// addresses by slug.
     #[test]
     fn every_page_round_trips_through_its_slug() {
-        assert_eq!(Page::ALL.len(), 9);
+        assert_eq!(Page::ALL.len(), 10);
+        assert_eq!(Page::from_slug("teleprompter"), Some(Page::Teleprompter));
         for page in Page::ALL {
             assert_eq!(Page::from_slug(page.slug()), Some(*page));
         }

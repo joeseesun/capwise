@@ -1594,7 +1594,7 @@ pub fn open_mode_select(cx: &mut App) -> bool {
     let main = cx.global::<AppWindows>().main;
     let mode = main
         .update(cx, |view, _window, cx| view.effective_mode(cx))
-        .unwrap_or(Mode::Instant);
+        .unwrap_or(Mode::Studio);
 
     if let Some(handle) = cx.global::<AppWindows>().mode_select {
         // A live window is reused, re-reading the mode the way a re-shown
@@ -2646,17 +2646,6 @@ fn overlay_window_ids(cx: &mut App) -> Vec<scap_targets::WindowId> {
         })
         .filter_map(|number| number.to_string().parse().ok())
         .collect()
-}
-
-/// The overlay's "Sign In To Use": close the picker and put the sign-in
-/// prompt on the main window, brought forward even when the picker was opened
-/// from the tray with the main window closed.
-pub fn show_instant_sign_in(kind: crate::main_window::TargetType, cx: &mut App) {
-    dismiss_target_overlays(cx);
-    let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, _, cx| view.show_sign_in_prompt(kind, cx))
-        .ok();
-    show_main_window(cx);
 }
 
 /// How long Start waits for the picker's window moves to land. A move waits

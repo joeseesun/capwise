@@ -740,24 +740,23 @@ impl SettingsWindow {
         let (typed, endpoint) = self.ai_draft(cx);
         self.pages.ai.status = Status::Saving;
         cx.notify();
-        let tested_endpoint = endpoint.clone();
         self.spawn_tokio(
             window,
             cx,
             async move {
-                let typed_for_test = typed.clone();
                 tokio::task::spawn_blocking(move || {
-                    run_check(target, typed_for_test, tested_endpoint)
+                    let ms = run_check(target, typed.clone(), endpoint.clone())?;
+                    let kind = target.kind.store_kind();
+                    if !typed.is_empty() {
+                        ai_store::set_key(kind, target.id, &typed)?;
+                    }
+                    if !ai_store::set_endpoint(kind, target.id, &endpoint) {
+                        return Err(tr::settings::ai::save_settings_failed().into());
+                    }
+                    Ok(ms)
                 })
                 .await
                 .unwrap_or_else(|error| Err(error.to_string()))
-                .and_then(|ms| {
-                    if !typed.is_empty() {
-                        ai_store::set_key(target.kind.store_kind(), target.id, &typed)?;
-                    }
-                    ai_store::set_endpoint(target.kind.store_kind(), target.id, &endpoint);
-                    Ok(ms)
-                })
             },
             move |this, result, _window, cx| match result {
                 Ok(ms) => {

@@ -969,8 +969,10 @@ on = "Sí"
 
 [main.error]
 camera_only_needs_camera = "Para grabar solo con cámara hay que seleccionar una cámara."
+camera_unavailable = "La cámara seleccionada no está disponible. Vuelve a conectarla o elige otra cámara."
 copy = "Copiar error"
 devices_not_ready = "Los dispositivos de grabación no están listos. Abre la grabadora e inténtalo de nuevo."
+microphone_unavailable = "El micrófono seleccionado «{name}» no está disponible. Vuelve a conectarlo o elige otro micrófono."
 title = "Algo salió mal"
 
 [main.header]
@@ -1056,17 +1058,6 @@ title = "Grabación incompleta"
 nothing_saved = "No se guardó ningún vídeo antes de que se detuviera esta grabación, así que no hay nada que recuperar. Sus archivos siguen en {path}."
 rebuild_failed = "Capwise no pudo reconstruir esta grabación ({error}). No se ha eliminado nada y los archivos originales están en {path}."
 storage = "No hay suficiente espacio libre para recuperar esta grabación ({error}). Libera espacio y vuelve a pulsar Recuperar. No se ha eliminado nada y los archivos están en {path}."
-
-[main.sign_in]
-message = "Con el modo Instant, la grabación se sube mientras grabas, así que tu enlace para compartir está listo en cuanto te detienes."
-not_now = "Ahora no"
-open_browser_again = "Volver a abrir el navegador"
-pending_message = "Termina de iniciar sesión en Capwise en tu navegador. Capwise volverá aquí y abrirá la grabadora cuando acabes."
-sign_in = "Iniciar sesión"
-timed_out = "Se agotó el tiempo para iniciar sesión. Inténtalo de nuevo."
-title = "Inicia sesión para usar el modo Instant"
-use_studio = "Usar Studio"
-waiting = "Esperando a tu navegador"
 
 [main.storage]
 blocked = "Solo hay {available} GB disponibles en tu unidad de grabación. Libera espacio para tener al menos 512 MB disponibles antes de grabar."
@@ -1403,8 +1394,6 @@ starting = "Iniciando la conversión..."
 display_fallback = "Pantalla {id}"
 countdown_title = "Cuenta atrás de la grabación"
 countdown_body = "Espera unos segundos después de pulsar Iniciar grabación antes de empezar a grabar."
-mode_title = "Cambiar el modo de grabación"
-mode_body = "Instant te da un enlace para compartir en cuanto detienes la grabación. Studio graba con la máxima calidad para editar."
 
 [overlay.area]
 split_ratio = "5:4 · Dividido"
@@ -1441,12 +1430,7 @@ microphone_allow = "Permitir acceso al micrófono…"
 microphone_turn_on = "Activar el acceso al micrófono en Ajustes…"
 
 [overlay.start]
-instant = "Modo Instant: graba un enlace para compartir"
-instant_sign_in = "Modo Instant: inicia sesión para grabar al instante"
-sign_in = "Inicia sesión para usar"
 start_recording = "Iniciar grabación"
-studio = "Modo Studio: graba y edita en local"
-take_screenshot = "Hacer captura de pantalla"
 
 [overlay.window]
 size_title = "Cambiar el tamaño de la ventana"
@@ -3320,6 +3304,7 @@ delete = "Eliminar el preajuste actual"
 copy_name = "{name} · Copia {number}"
 
 [dialog.teleprompter.assist]
+restart = "Volver a leer desde el principio"
 write = "Escribir con IA"
 privacy = "Solo se envía el tema de abajo al modelo seleccionado. Tu guion actual permanece en este dispositivo. Edita el borrador antes de usarlo."
 topic = "Tema, público y duración, por ejemplo, un tutorial de grabación de un minuto"
@@ -3590,6 +3575,7 @@ remove = "Quitar"
 retired_name = "Modelo Parakeet antiguo"
 retired_note = "Ya no se usa, puedes eliminarlo · {size} en disco"
 save = "Guardar"
+save_settings_failed = "No se pudieron guardar la dirección del servicio y el modelo. Inténtalo de nuevo."
 saving = "Comprobando y guardando…"
 sign_in_again = "Volver a iniciar"
 sign_in_with = "Iniciar sesión con {name}"

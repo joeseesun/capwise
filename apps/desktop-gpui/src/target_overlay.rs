@@ -45,7 +45,6 @@ use crate::{
         GuideAxis, NormRect, SNAP_PX, SnapGuide, build_snap_targets, snap_moving_rect,
     },
     main_window::{Mode, TargetType},
-    sign_in::SignIn,
     theme::Theme,
     ui::Hint,
 };
@@ -1237,7 +1236,6 @@ pub struct OverlayWindow {
     /// The mode menu the start pill's caret drops down -- `menuModes()`
     /// popped up at the event location (`target-select-overlay.tsx:2064-2090,
     /// 2206-2210`). `Some` while it is open.
-    mode_menu: Option<crate::ui::MenuState>,
     countdown_menu: Option<crate::ui::MenuState>,
     aspect_menu: Option<crate::ui::MenuState>,
     /// The selection drawn mid-reshape: where it started and when. `crop`
@@ -1267,7 +1265,6 @@ pub struct OverlayWindow {
     device_menu: Option<OverlayDeviceMenu>,
     /// Cached off the store so the start pill does not re-read the settings
     /// file every frame; refreshed whenever the shared sign-in reports.
-    signed_in: bool,
     /// The mic fill the last render drew, `None` when it drew no meter.
     drawn_microphone_fill: Cell<Option<f32>>,
     /// When the area hint first drew since it was last hidden.
@@ -1287,22 +1284,6 @@ struct OverlayDeviceMenu {
     state: crate::ui::MenuState,
     items: Vec<crate::ui::MenuItem>,
     choices: Vec<OverlayDeviceChoice>,
-}
-
-/// `menuModes` (`target-select-overlay.tsx:2064-2090`): three check items, in
-/// this order, checked on the current mode. Picking one switches the mode and
-/// never starts a recording.
-const MODE_MENU: [(fn() -> &'static str, Mode); 3] = [
-    (tr::main::mode::header::studio, Mode::Studio),
-    (tr::main::mode::header::instant, Mode::Instant),
-    (tr::main::mode::header::screenshot, Mode::Screenshot),
-];
-
-fn mode_menu_items(current: Mode) -> Vec<crate::ui::MenuItem> {
-    MODE_MENU
-        .into_iter()
-        .map(|(label, mode)| crate::ui::MenuItem::new(label(), mode == current))
-        .collect()
 }
 
 /// Overlays are never the active window while the picker is up, and an
@@ -1352,16 +1333,6 @@ impl OverlayWindow {
         media.update(cx, |access, cx| access.refresh(cx));
         cx.observe_in(&media, window, |_, _, window, cx| repaint(window, cx))
             .detach();
-        cx.observe_in(
-            &SignIn::global(cx),
-            window,
-            |this: &mut Self, _, window, cx| {
-                this.signed_in = crate::store::auth_snapshot().signed_in();
-                repaint(window, cx);
-            },
-        )
-        .detach();
-
         let capture_scale = capture_scale_factor(window);
         let logical = display
             .logical_size()
@@ -1421,7 +1392,6 @@ impl OverlayWindow {
             area_hover: None,
             area_camera_pending: locked_area.is_some(),
             recording_area: false,
-            mode_menu: None,
             countdown_menu: None,
             aspect_menu: None,
             reshape: None,
@@ -1439,7 +1409,6 @@ impl OverlayWindow {
             inline_camera_subscription: None,
             empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
             device_menu: None,
-            signed_in: crate::store::auth_snapshot().signed_in(),
             drawn_microphone_fill: Cell::new(None),
             selection_hint_started: None,
             selection_hint_redraw: None,
@@ -1469,7 +1438,6 @@ impl OverlayWindow {
         self.recording_area = true;
         self.drag = None;
         self.snap_guides.clear();
-        self.mode_menu = None;
         self.countdown_menu = None;
         self.device_menu = None;
         self.aspect_menu = None;
@@ -1521,13 +1489,6 @@ impl OverlayWindow {
         let Some(target) = self.target(cx) else {
             return;
         };
-        if self.needs_sign_in(self.select.read(cx).recording_mode, cx) {
-            self.signed_in = crate::store::auth_snapshot().signed_in();
-            if !self.signed_in {
-                self.start_sign_in(cx);
-                return;
-            }
-        }
         if let ScreenCaptureTarget::Window { id } = &target {
             let window = scap_targets::Window::from_id(id);
             let expected_title = crate::main_window::auto_window_title();
@@ -1549,14 +1510,6 @@ impl OverlayWindow {
             }
         }
         tracing::info!(target = ?target.kind_str(), "overlay start pressed");
-        if self.select.read(cx).recording_mode == Mode::Screenshot {
-            // Screenshots never reach the recording actors: the target goes
-            // straight to the capture path, which closes these overlays
-            // itself (`startRecording`'s screenshot branch,
-            // `target-select-overlay.tsx:1995`).
-            cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
-            return;
-        }
         // Deferred: this runs inside the overlay's own window update and the
         // orchestrator closes that very window.
         cx.defer(move |cx: &mut App| app_windows::start_recording_from_overlay(target, cx));
@@ -1564,28 +1517,6 @@ impl OverlayWindow {
 
     fn dismiss(&mut self, cx: &mut Context<Self>) {
         cx.defer(app_windows::dismiss_target_overlays);
-    }
-
-    /// Instant mode uploads as it records, so it cannot start signed out
-    /// (`target-select-overlay.tsx`'s "Sign In To Use"). The editor's record
-    /// flow always records Studio whatever the pill says.
-    fn needs_sign_in(&self, mode: Mode, cx: &App) -> bool {
-        mode == Mode::Instant
-            && !self.signed_in
-            && crate::session::RecordingSession::global(cx)
-                .read(cx)
-                .editor_recording_target()
-                .is_none()
-    }
-
-    /// The overlays sit above every app, browser included, so they step aside
-    /// for the main window's sign-in prompt, and re-open for the same target
-    /// kind once signed in.
-    fn start_sign_in(&mut self, cx: &mut Context<Self>) {
-        let Some(kind) = self.select.read(cx).mode else {
-            return;
-        };
-        cx.defer(move |cx: &mut App| app_windows::show_instant_sign_in(kind, cx));
     }
 
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
@@ -1889,21 +1820,12 @@ impl Render for OverlayWindow {
                 // the overlays are up; here it is a plain key handler on the
                 // overlay that has focus (see the README deviation).
                 tracing::debug!(key = %event.keystroke.key, "overlay key");
-                // The mode menu takes its keys first, like the menus above.
-                if this.mode_menu.is_none() && this.area_key(&event.keystroke, window, cx) {
+                if this.area_key(&event.keystroke, window, cx) {
                     cx.stop_propagation();
                     return;
                 }
                 if event.keystroke.key.as_str() == "escape" {
-                    // An open mode menu takes the Escape before the
-                    // overlay does -- the native menu in the Tauri app
-                    // eats it the same way during menu tracking.
-                    if this.mode_menu.is_some() {
-                        this.mode_menu = None;
-                        cx.notify();
-                    } else {
-                        this.dismiss(cx);
-                    }
+                    this.dismiss(cx);
                 }
             }))
             .size_full()
@@ -1929,16 +1851,14 @@ impl Render for OverlayWindow {
         // Painted after the variant so the dropdown sits above the start
         // cluster it drops from.
         // A hint gives way to any open menu, which is what it would explain.
-        let menu_open = self.mode_menu.is_some()
-            || self.countdown_menu.is_some()
+        let menu_open = self.countdown_menu.is_some()
             || self.aspect_menu.is_some()
             || self.window_menu.is_some()
             || self.device_menu.is_some();
         let hint = (!menu_open)
             .then(|| self.hints.render(window, &self.theme, cx.reduce_motion()))
             .flatten();
-        root.children(self.render_mode_menu(cx))
-            .children(self.render_countdown_menu(cx))
+        root.children(self.render_countdown_menu(cx))
             .children(self.render_aspect_menu(cx))
             .children(self.render_window_menu(cx))
             .children(self.render_device_menu(cx))
@@ -2074,7 +1994,6 @@ impl OverlayWindow {
             items.insert(0, item);
             choices.insert(0, choice);
         }
-        self.mode_menu = None;
         self.countdown_menu = None;
         self.aspect_menu = None;
         self.window_menu = None;
@@ -2236,26 +2155,6 @@ impl OverlayWindow {
             .into_any_element()
     }
 
-    /// The caret's dropdown while it is open -- `Menu.popup` in the source,
-    /// rendered with the app's own menu component here (the closest thing to
-    /// a native context menu this side of AppKit; check state, outside-click
-    /// dismissal and Escape behave the same).
-    fn render_mode_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let state = self.mode_menu.as_ref()?;
-        let items = mode_menu_items(self.select.read(cx).recording_mode);
-        Some(
-            crate::ui::Menu::plain(&self.theme, "overlay-mode-menu", items, state)
-                .on_select(cx.listener(|this, index: &usize, _window, cx| {
-                    this.choose_mode(*index, cx);
-                }))
-                .on_dismiss(cx.listener(|this, _, _window, cx| {
-                    this.mode_menu = None;
-                    cx.notify();
-                }))
-                .into_any_element(),
-        )
-    }
-
     fn render_countdown_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let state = self.countdown_menu.as_ref()?;
         let current = crate::store::GeneralSettings::load()
@@ -2288,27 +2187,6 @@ impl OverlayWindow {
             )
         {
             tracing::warn!(value, "could not save the recording countdown");
-        }
-        cx.notify();
-    }
-
-    /// A `CheckMenuItem` action: `setOptions("mode", ..)` +
-    /// `commands.setRecordingMode(..)` -- the app's single mode funnel
-    /// (`app_windows::set_recording_mode` -> `MainWindow::set_mode`), which
-    /// writes the shared store key, relabels every open overlay through
-    /// `TargetSelect::set_recording_mode`, and refreshes the tray.
-    fn choose_mode(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.mode_menu = None;
-        if crate::session::RecordingSession::global(cx)
-            .read(cx)
-            .editor_recording_target()
-            .is_some()
-        {
-            cx.notify();
-            return;
-        }
-        if let Some((_, mode)) = MODE_MENU.get(index).copied() {
-            app_windows::set_recording_mode(mode, cx);
         }
         cx.notify();
     }
@@ -2814,7 +2692,6 @@ impl OverlayWindow {
             .into_iter()
             .map(|(label, checked, _)| crate::ui::MenuItem::new(label, checked))
             .collect();
-        self.mode_menu = None;
         self.countdown_menu = None;
         self.device_menu = None;
         self.aspect_menu = None;
@@ -3950,7 +3827,6 @@ impl OverlayWindow {
 
     fn open_aspect_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let items = self.aspect_menu_items();
-        self.mode_menu = None;
         self.countdown_menu = None;
         self.device_menu = None;
         self.window_menu = None;
@@ -4157,8 +4033,7 @@ impl OverlayWindow {
         .h(px(height))
     }
 
-    /// `RecordingControls`: the close button, the gradient start pill with its
-    /// mode line and caret, and the pre-recording settings button.
+    /// The close, record, and countdown controls.
     fn render_controls_cluster(
         &self,
         target: Option<ScreenCaptureTarget>,
@@ -4166,7 +4041,6 @@ impl OverlayWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let mode = self.select.read(cx).recording_mode;
         let disabled = disabled || target.is_none();
 
         // `flex flex-col gap-2.5 items-stretch my-2.5 w-104`.
@@ -4188,7 +4062,7 @@ impl OverlayWindow {
                         .gap(px(10.))
                         .items_center()
                         .child(self.render_close_button(cx))
-                        .child(self.render_start_button(target, disabled, mode, cx))
+                        .child(self.render_start_button(disabled, cx))
                         .child(
                             self.hinted(
                                 self.glass_button(36.).id("overlay-countdown"),
@@ -4219,7 +4093,6 @@ impl OverlayWindow {
                                             crate::ui::MenuItem::new(label(), *value == current)
                                         })
                                         .collect::<Vec<_>>();
-                                    this.mode_menu = None;
                                     this.device_menu = None;
                                     this.aspect_menu = None;
                                     this.window_menu = None;
@@ -4231,18 +4104,16 @@ impl OverlayWindow {
                         ),
                 ),
             )
-            .when(mode != Mode::Screenshot, |cluster| {
-                cluster.child(
-                    self.glass_surface().p(px(12.)).child(
-                        div()
-                            .flex()
-                            .gap(px(8.))
-                            .w_full()
-                            .child(self.render_device_control(true, cx))
-                            .child(self.render_device_control(false, cx)),
-                    ),
-                )
-            })
+            .child(
+                self.glass_surface().p(px(12.)).child(
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .w_full()
+                        .child(self.render_device_control(true, cx))
+                        .child(self.render_device_control(false, cx)),
+                ),
+            )
     }
 
     /// `size-9 rounded-full bg-gray-12` with the inverted X glyph.
@@ -4292,41 +4163,13 @@ impl OverlayWindow {
         }))
     }
 
-    /// The start affordance: `h-11 rounded-full bg-linear-to-r from-blue-10 to
-    /// blue-11` (`blue-9`/`blue-10` in the dark theme), mode icon, two-line
-    /// label, and the mode caret on a divided trailing block.
-    fn render_start_button(
-        &self,
-        target: Option<ScreenCaptureTarget>,
-        disabled: bool,
-        mode: Mode,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_start_button(&self, disabled: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let (from, to) = if theme.is_dark() {
             (theme.blue_9, theme.blue_10)
         } else {
             (theme.blue_10, theme.blue_11)
         };
-        let needs_sign_in = self.needs_sign_in(mode, cx);
-        let label = match mode {
-            Mode::Screenshot => tr::overlay::start::take_screenshot(),
-            _ if needs_sign_in => tr::overlay::start::sign_in(),
-            _ => tr::overlay::start::start_recording(),
-        };
-        let icon = match mode {
-            Mode::Instant if needs_sign_in => "icons/user-round.svg",
-            Mode::Instant => "icons/instant.svg",
-            Mode::Studio => "icons/film-cut.svg",
-            Mode::Screenshot => "icons/camera.svg",
-        };
-        let mode_label = match mode {
-            Mode::Instant if needs_sign_in => tr::overlay::start::instant_sign_in(),
-            Mode::Instant => tr::overlay::start::instant(),
-            Mode::Studio => tr::overlay::start::studio(),
-            Mode::Screenshot => tr::main::mode::header::screenshot(),
-        };
-        let _ = target;
 
         div()
             .id("overlay-start")
@@ -4337,142 +4180,41 @@ impl OverlayWindow {
             .min_w_0()
             .max_w(px(288.))
             .overflow_hidden()
-            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(10.))
+            .px(px(12.))
             .h(px(44.))
             .rounded_full()
             .text_color(gpui::white())
-            // `bg-linear-to-r from-blue-10 via-blue-10 to-blue-11`: the via
-            // stop sits at 50% with the from colour, so the ramp only starts
-            // halfway.
             .bg(linear_gradient(
                 90.,
                 linear_color_stop(Hsla::from(from), 0.5),
                 linear_color_stop(Hsla::from(to), 1.0),
             ))
             .child(
-                div()
-                    .id("overlay-start-action")
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .py(px(4.))
-                    .pl(px(16.))
-                    .min_w_0()
-                    // The pill's `overflow-hidden rounded-full` clips these
-                    // fills in the Tauri app; gpui masks are rectangles, so
-                    // the halves round their own outer caps (h-11 -> 22px) or
-                    // they paint square corners past the pill onto the glass
-                    // card behind it.
-                    .rounded_l(px(22.))
-                    // `opacity-60 cursor-not-allowed hover:bg-transparent`.
-                    .when(disabled, |this| this.opacity(0.6))
-                    .when(!disabled, |this| {
-                        this.hover(|style| style.bg(gpui::hsla(0., 0., 1., 0.1)))
-                    })
-                    .child(
-                        svg()
-                            .path(icon)
-                            .size(px(16.))
-                            .flex_shrink_0()
-                            .text_color(gpui::white()),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .ml(px(12.))
-                            .mr(px(8.))
-                            .min_w_0()
-                            .child(
-                                div()
-                                    // `text-[0.95rem] font-medium`.
-                                    .text_size(px(15.2))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .truncate()
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(-2.))
-                                    .text_size(px(11.))
-                                    .whitespace_nowrap()
-                                    .truncate()
-                                    // `text-[11px] ... text-white/90
-                                    //  font-light` (`t-s-overlay.tsx:2200`).
-                                    // `font-light` is 300 and no 300 face is
-                                    // loaded (`ui-solid/vite.js:31-33` ships
-                                    // 400/500/700), so CSS font-matching
-                                    // resolves it to 400 -- Regular, not Light
-                                    // -- and it must opt out of the `body`
-                                    // Medium default explicitly.
-                                    .font_weight(FontWeight::NORMAL)
-                                    .text_color(gpui::hsla(0., 0., 1., 0.9))
-                                    .child(mode_label),
-                            ),
-                    ),
+                svg()
+                    .path("icons/film-cut.svg")
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .text_color(gpui::white()),
             )
             .child(
-                // `pl-2.5 pr-3 py-1.5 border-l border-white/20 bg-white/5`,
-                // `onMouseDown/onClick={showMenu(menuModes(), e)}`: the caret
-                // pops the mode menu at the press location and must never arm
-                // the pill's start click -- gpui arms clicks on mouse-down per
-                // hitbox, so the stop has to happen here, not on a click
-                // handler. Active even while start is disabled, same as the
-                // source (the disabled styling only wraps the leading half).
-                self.hinted(
-                    div().id("overlay-mode-picker"),
-                    "overlay-mode-picker",
-                    Hint::new(tr::overlay::mode_title()).body(tr::overlay::mode_body()),
-                    cx,
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
-                        cx.stop_propagation();
-                        if crate::session::RecordingSession::global(cx)
-                            .read(cx)
-                            .editor_recording_target()
-                            .is_some()
-                        {
-                            return;
-                        }
-                        let current = this.select.read(cx).recording_mode;
-                        this.device_menu = None;
-                        this.countdown_menu = None;
-                        this.aspect_menu = None;
-                        this.window_menu = None;
-                        this.mode_menu = Some(crate::ui::MenuState::new(
-                            event.position,
-                            &mode_menu_items(current),
-                        ));
-                        cx.notify();
-                    }),
-                )
-                .flex()
-                .items_center()
-                .pl(px(10.))
-                .pr(px(12.))
-                .py(px(6.))
-                // The right cap of the pill, for the same reason the
-                // leading half takes `rounded_l`: its `bg-white/5` panel
-                // otherwise pokes square corners past `rounded-full`.
-                .rounded_r(px(22.))
-                .border_l_1()
-                .border_color(gpui::hsla(0., 0., 1., 0.2))
-                .bg(gpui::hsla(0., 0., 1., 0.05))
-                .child(
-                    svg()
-                        .path("icons/caret-down.svg")
-                        .w(px(10.))
-                        .h(px(6.))
-                        .text_color(gpui::white()),
-                ),
+                div()
+                    .min_w_0()
+                    .text_size(px(15.2))
+                    .font_weight(FontWeight::MEDIUM)
+                    .truncate()
+                    .child(tr::overlay::start::start_recording()),
             )
+            .when(disabled, |this| this.opacity(0.6))
             .when(!disabled, |this| {
-                this.on_click(cx.listener(|this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.start_recording(window, cx);
-                }))
+                this.hover(|style| style.opacity(0.9)).on_click(cx.listener(
+                    |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.start_recording(window, cx);
+                    },
+                ))
             })
     }
 }
@@ -5045,25 +4787,6 @@ mod tests {
             overlay_viewport_size((1024., f32::INFINITY), viewport),
             viewport
         );
-    }
-
-    #[test]
-    fn mode_menu_matches_menu_modes() {
-        // `menuModes` order (`target-select-overlay.tsx:2064-2090`) with the
-        // check on the current mode.
-        let items = mode_menu_items(Mode::Instant);
-        assert_eq!(
-            items
-                .iter()
-                .map(|item| (item.label.to_string(), item.checked))
-                .collect::<Vec<_>>(),
-            vec![
-                ("Studio Mode".to_string(), false),
-                ("Instant Mode".to_string(), true),
-                ("Screenshot Mode".to_string(), false),
-            ],
-        );
-        assert_eq!(MODE_MENU[2].1, Mode::Screenshot);
     }
 
     #[test]

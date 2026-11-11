@@ -983,8 +983,10 @@ on = { text = "On", max_px = 130, size = 11 }
 
 [main.error]
 camera_only_needs_camera = "Camera-only recording requires a selected camera."
+camera_unavailable = "The selected camera is unavailable. Reconnect it or choose another camera."
 copy = "Copy error"
 devices_not_ready = "Recording devices are not ready. Open the recorder and try again."
+microphone_unavailable = "The selected microphone “{name}” is unavailable. Reconnect it or choose another microphone."
 title = "Something went wrong"
 
 [main.header]
@@ -1073,17 +1075,6 @@ title = "Incomplete Recording"
 nothing_saved = { text = "No video was saved before this recording stopped, so there is nothing to recover. Its files are still in {path}.", context = "{path} is a folder path." }
 rebuild_failed = { text = "Capwise could not rebuild this recording ({error}). Nothing was deleted, and the original files are in {path}.", context = "{error} is a technical error message, usually in English. {path} is a folder path." }
 storage = { text = "There is not enough free space to recover this recording ({error}). Free up some space and press Recover again. Nothing was deleted, and the files are in {path}.", context = "{error} is a technical error message, usually in English. {path} is a folder path." }
-
-[main.sign_in]
-message = "Instant Mode uploads while you record, so your shareable link is ready the moment you stop."
-not_now = "Not now"
-open_browser_again = "Open browser again"
-pending_message = "Finish signing in to Capwise in your browser. Capwise comes back here and opens the recorder when you're done."
-sign_in = "Sign In"
-timed_out = "Sign in timed out. Try again."
-title = "Sign in to use Instant Mode"
-use_studio = "Use Studio"
-waiting = "Waiting for your browser"
 
 [main.storage]
 blocked = { text = "Only {available} GB is available on your recording drive. Free up space so at least 512 MB is available before recording.", context = "{available} is a number with two decimals, such as 0.40." }
@@ -1420,8 +1411,6 @@ starting = "Starting conversion..."
 display_fallback = { text = "Display {id}", context = "Name for a display the system does not name; {id} is a number." }
 countdown_title = { text = "Recording countdown", context = "Hint title over the countdown button in the recording picker." }
 countdown_body = { text = "Wait a few seconds after you press Start before recording begins.", context = "Hint body for the countdown button. Start is the Start Recording button." }
-mode_title = { text = "Change recording mode", context = "Hint title over the mode picker in the recording picker." }
-mode_body = "Instant gives you a link to share the moment you stop. Studio records in full quality for editing."
 
 [overlay.area]
 split_ratio = "5:4 · Split"
@@ -1458,12 +1447,7 @@ microphone_allow = "Allow microphone access…"
 microphone_turn_on = "Turn on microphone access in Settings…"
 
 [overlay.start]
-instant = { text = "Instant Mode — Record shareable link", context = "Second line of the start button, 11px, truncates." }
-instant_sign_in = { text = "Instant Mode — Sign in to record instantly", context = "Second line of the start button, 11px, truncates." }
-sign_in = "Sign In To Use"
 start_recording = "Start Recording"
-studio = { text = "Studio Mode — Record and edit locally", context = "Second line of the start button, 11px, truncates." }
-take_screenshot = "Take Screenshot"
 
 [overlay.window]
 size_title = "Change window size"
@@ -3444,6 +3428,7 @@ remove = "Remove"
 retired_name = "Old Parakeet model"
 retired_note = "No longer used, safe to delete · {size} on disk"
 save = "Save"
+save_settings_failed = "Could not save the service address and model. Try again."
 saving = "Checking and saving…"
 sign_in_again = "Sign in again"
 sign_in_with = "Sign in with {name}"
@@ -3589,6 +3574,7 @@ saved = "Saved"
 save_failed = "Could not save. Instructions must contain 1–12,000 characters."
 
 [dialog.teleprompter.assist]
+restart = "Read again from the top"
 done = "Done"
 edit = "Edit"
 estimate = "About {time} · {words} words"
@@ -3603,19 +3589,30 @@ mode_scroll = "Steady scrolling"
 mode_scroll_note = "Scrolls at the speed you set. Trackpad moves the text; it carries on from there."
 save_failed = "Script not saved: the settings file could not be read or written. Keep this window open and retry."
 retry_save = "Retry save"
-draft_busy = "Generating. Editing is available when finished."
+draft_busy = "Writing…"
 write = "Write with AI"
-privacy = "Only the topic below is sent to your selected model. Your current script stays on this device. Edit the draft before using it."
-topic = "Topic, audience and duration, e.g. a one-minute recording tutorial"
+privacy = "Only the topic above is sent. Your current script is not."
+topic = "What's it about? e.g. show new users how to trim a recording"
 draft_hint = "Your generated draft appears here and can be edited"
-script = "Write full script"
-outline = "Write talking points"
+script = "Full script"
+outline = "Talking points"
 model_missing = "Connect a writing model in Settings first"
 settings = "Model settings"
 use_draft = "Use draft"
 cancel = "Cancel"
 restore = "Restore previous"
 invalid_result = "The model returned an empty or oversized draft. Try again (20,000 characters maximum)."
+generate = "Write"
+stop = "Stop"
+regenerate = "Try again"
+duration_short = "30 sec"
+duration_minute = "1 min"
+duration_long = "3 min"
+draft_meta = "About {time} · {words} words · edit freely"
+examples = "Start from a topic"
+example_demo = "Demo a new feature for first-time users"
+example_concept = "Explain a technical idea in plain words"
+example_recap = "Recap this week's progress and next steps"
 
 [editor.assets]
 stock_photos = "Photos · Unsplash"

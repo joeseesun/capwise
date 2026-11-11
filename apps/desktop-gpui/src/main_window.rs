@@ -26,7 +26,6 @@ use crate::{
     recording,
     session::{Phase, RecordingSession},
     settings_window::Page,
-    sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome},
     target_thumbnails,
     theme::Theme,
     ui,
@@ -922,14 +921,6 @@ impl RecordingStartPermit {
     }
 }
 
-/// Instant Mode's sign-in gate, shown here when the overlay's "Sign In To
-/// Use" is pressed: the overlays close so the browser is reachable, and they
-/// re-open for `kind` once the account is signed in.
-struct SignInPrompt {
-    kind: TargetType,
-    error: Option<String>,
-}
-
 struct MicrophoneWarning {
     config: recording::StartConfig,
     permit: RecordingStartPermit,
@@ -984,7 +975,6 @@ pub struct MainWindow {
     checking_storage: bool,
     deep_link_start: Option<RecordingStartPermit>,
     microphone_warning: Option<MicrophoneWarning>,
-    sign_in_prompt: Option<SignInPrompt>,
     copied_error: Option<String>,
     /// Header recordings / screenshots panel. Scanned only while that panel
     /// is open so a large library is not walked on every home paint.
@@ -1202,36 +1192,6 @@ impl MainWindow {
         })
         .detach();
 
-        let sign_in = SignIn::global(cx);
-        cx.observe(&sign_in, |_, _, cx| cx.notify()).detach();
-        cx.subscribe(&sign_in, |this, _, event, cx| {
-            let SignInEvent::Finished { origin, outcome } = event else {
-                return;
-            };
-            let Some(prompt) = this.sign_in_prompt.as_mut() else {
-                return;
-            };
-            match outcome {
-                SignInOutcome::SignedIn => {
-                    let kind = prompt.kind;
-                    this.sign_in_prompt = None;
-                    let session = this.session.read(cx);
-                    if session.phase == Phase::Idle && session.editor_recording_target().is_none() {
-                        this.arm_overlay(kind, cx);
-                    }
-                }
-                SignInOutcome::Failed(error) if matches!(origin, SignInOrigin::Overlay(_)) => {
-                    prompt.error = Some(error.clone());
-                }
-                SignInOutcome::TimedOut if matches!(origin, SignInOrigin::Overlay(_)) => {
-                    prompt.error = Some(tr::main::sign_in::timed_out().into());
-                }
-                _ => {}
-            }
-            cx.notify();
-        })
-        .detach();
-
         let keyboard_nav = ui::keyboard_nav::install(window, cx, Self::keyboard_nav_blocked);
 
         Self {
@@ -1275,7 +1235,6 @@ impl MainWindow {
             checking_storage: false,
             deep_link_start: None,
             microphone_warning: None,
-            sign_in_prompt: None,
             copied_error: None,
             library: None,
             library_task: None,
@@ -1301,7 +1260,6 @@ impl MainWindow {
     fn keyboard_nav_blocked(&self, cx: &gpui::App) -> bool {
         self.session.read(cx).phase != Phase::Idle
             || self.microphone_warning.is_some()
-            || self.sign_in_prompt.is_some()
             || self.idle_error(cx).is_some()
             || app_windows::clean_capture_pending(cx)
     }
@@ -2467,14 +2425,47 @@ impl MainWindow {
         let Ok(permit) = self.prepare_deep_link_start(cx) else {
             return;
         };
+        if !crate::store::GeneralSettings::load().confirm_without_microphone {
+            self.check_storage_before_start(config, false, permit, cx);
+            return;
+        }
+        if let Some(ready) = config
+            .input_readiness
+            .microphone
+            .clone()
+            .filter(|_| config.microphone.is_some())
+        {
+            cx.spawn(async move |this, cx| {
+                let microphone_available = ready.await.is_ok();
+                this.update(cx, |this, cx| {
+                    this.start_after_microphone_check(config, permit, microphone_available, cx);
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         let microphone_available = config.microphone.as_ref().is_some_and(|name| {
             self.devices
                 .microphones
                 .iter()
                 .any(|device| &device.name == name)
         });
-        if !microphone_available && crate::store::GeneralSettings::load().confirm_without_microphone
-        {
+        self.start_after_microphone_check(config, permit, microphone_available, cx);
+    }
+
+    fn start_after_microphone_check(
+        &mut self,
+        config: recording::StartConfig,
+        permit: RecordingStartPermit,
+        microphone_available: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.recording_start_is_current(&permit, cx) {
+            self.finish_recording_start(&permit);
+            return;
+        }
+        if !microphone_available {
             self.microphone_warning = Some(MicrophoneWarning {
                 config,
                 permit,
@@ -3016,9 +3007,6 @@ impl Render for MainWindow {
             .when(self.microphone_warning.is_some(), |this| {
                 this.child(self.render_microphone_warning(cx))
             })
-            .when(self.sign_in_prompt.is_some(), |this| {
-                this.child(self.render_sign_in_prompt(cx))
-            })
             // A failed start has nowhere else to surface: the overlays are
             // gone by then and the bar closed itself.
             .when_some(self.idle_error(cx), |this, error| {
@@ -3167,29 +3155,7 @@ impl MainWindow {
             )
     }
 
-    pub fn show_sign_in_prompt(&mut self, kind: TargetType, cx: &mut Context<Self>) {
-        self.clear_mode_hover();
-        self.sign_in_prompt = Some(SignInPrompt { kind, error: None });
-        cx.notify();
-    }
-
-    fn dismiss_sign_in_prompt(&mut self, cx: &mut Context<Self>) {
-        if self.sign_in_prompt.take().is_none() {
-            return;
-        }
-        // Only the attempt this prompt started; one from Settings or an
-        // editor keeps running.
-        let sign_in = SignIn::global(cx);
-        if matches!(
-            sign_in.read(cx).pending_origin(),
-            Some(SignInOrigin::Overlay(_))
-        ) {
-            sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
-        }
-        cx.notify();
-    }
-
-    /// The dialog frame the sign-in prompt and the error card share: a dimmed
+    /// The error dialog frame: a dimmed
     /// backdrop over the home view (clicking it dismisses), and a raised card
     /// with an icon badge, a title and a close button.
     fn render_modal(
@@ -3296,152 +3262,6 @@ impl MainWindow {
                             })),
                     ),
             )
-    }
-
-    fn render_sign_in_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let pending = SignIn::global(cx).read(cx).is_pending();
-        let error = self
-            .sign_in_prompt
-            .as_ref()
-            .and_then(|prompt| prompt.error.clone())
-            .filter(|_| !pending);
-
-        let message = if pending {
-            tr::main::sign_in::pending_message()
-        } else {
-            tr::main::sign_in::message()
-        };
-        let primary = if pending {
-            ui::Button::plain(
-                &theme,
-                "sign-in-prompt-reopen",
-                ui::ButtonVariant::Blue,
-                ui::ButtonSize::Lg,
-            )
-            .label(tr::main::sign_in::open_browser_again())
-            .full_width()
-            .on_click(cx.listener(|_, _, _, cx| {
-                SignIn::global(cx).update(cx, |sign_in, cx| sign_in.reopen(cx));
-            }))
-        } else {
-            ui::Button::plain(
-                &theme,
-                "sign-in-prompt-sign-in",
-                ui::ButtonVariant::Blue,
-                ui::ButtonSize::Lg,
-            )
-            .icon("icons/user-round.svg")
-            .label(tr::main::sign_in::sign_in())
-            .full_width()
-            .on_click(cx.listener(|this, _, _, cx| {
-                let Some(prompt) = this.sign_in_prompt.as_mut() else {
-                    return;
-                };
-                prompt.error = None;
-                let origin = SignInOrigin::Overlay(prompt.kind);
-                SignIn::global(cx).update(cx, |sign_in, cx| sign_in.start(origin, cx));
-                cx.notify();
-            }))
-        };
-        let secondary = if pending {
-            div().child(
-                ui::Button::plain(
-                    &theme,
-                    "sign-in-prompt-cancel",
-                    ui::ButtonVariant::Gray,
-                    ui::ButtonSize::Lg,
-                )
-                .label(tr::common::cancel())
-                .full_width()
-                .on_click(cx.listener(|_, _, _, cx| {
-                    SignIn::global(cx).update(cx, |sign_in, cx| sign_in.cancel(cx));
-                })),
-            )
-        } else {
-            div()
-                .flex()
-                .gap(px(8.))
-                .child(
-                    div().flex_1().child(
-                        ui::Button::plain(
-                            &theme,
-                            "sign-in-prompt-studio",
-                            ui::ButtonVariant::Gray,
-                            ui::ButtonSize::Lg,
-                        )
-                        .label(tr::main::sign_in::use_studio())
-                        .full_width()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let Some(prompt) = this.sign_in_prompt.take() else {
-                                return;
-                            };
-                            this.set_mode(Mode::Studio, cx);
-                            this.arm_overlay(prompt.kind, cx);
-                        })),
-                    ),
-                )
-                .child(
-                    div().flex_1().child(
-                        ui::Button::plain(
-                            &theme,
-                            "sign-in-prompt-dismiss",
-                            ui::ButtonVariant::Gray,
-                            ui::ButtonSize::Lg,
-                        )
-                        .label(tr::main::sign_in::not_now())
-                        .full_width()
-                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_sign_in_prompt(cx))),
-                    ),
-                )
-        };
-
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap(px(14.))
-            .child(
-                div()
-                    .text_size(px(12.5))
-                    .line_height(px(19.))
-                    .text_color(theme.gray_11)
-                    .child(message),
-            )
-            .when_some(error, |this, error| {
-                this.child(
-                    div()
-                        .rounded(px(8.))
-                        .bg(theme.red_3)
-                        .px(px(10.))
-                        .py(px(7.))
-                        .text_size(px(12.))
-                        .line_height(px(16.))
-                        .text_color(theme.red_11)
-                        .child(error),
-                )
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .child(primary)
-                    .child(secondary),
-            )
-            .into_any_element();
-
-        self.render_modal(
-            "sign-in-prompt",
-            ("icons/instant.svg", theme.blue_3, theme.blue_9),
-            if pending {
-                tr::main::sign_in::waiting()
-            } else {
-                tr::main::sign_in::title()
-            },
-            Self::dismiss_sign_in_prompt,
-            body,
-            cx,
-        )
     }
 
     fn render_clean_capture_preflight(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4325,8 +4145,6 @@ impl MainWindow {
     fn dismiss_main(&mut self, cx: &mut Context<Self>) -> bool {
         if self.microphone_warning.is_some() {
             self.dismiss_microphone_warning(cx);
-        } else if self.sign_in_prompt.is_some() {
-            self.dismiss_sign_in_prompt(cx);
         } else if self.idle_error(cx).is_some() {
             self.dismiss_idle_error(cx);
         } else if self.mode_hover.visible.is_some() {

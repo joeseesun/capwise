@@ -2,12 +2,13 @@ use gpui::{AnyElement, AppContext as _, Context, IntoElement, ParentElement, Sty
 
 use crate::{
     app_windows,
-    i18n::tr::{self, settings::teleprompter as copy},
+    i18n::tr,
     llm::{self, ContentModel},
     settings_window::{MenuKind, Page, SettingsWindow},
     store::{self, TeleprompterState},
     ui,
 };
+use tr::settings::teleprompter as copy;
 
 const MODEL: &str = "scriptModel";
 const VOICE_FOLLOW: &str = "defaultVoiceFollow";
