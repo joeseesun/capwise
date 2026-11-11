@@ -22,10 +22,14 @@ use crate::{
 
 const VOICES: &[(&str, &str)] = &[
     (speech::VOICE, "Vivi 2.0"),
+    ("zh_male_liufei_uranus_bigtts", "刘飞 2.0"),
     ("zh_female_xiaohe_uranus_bigtts", "小何 2.0"),
     ("zh_male_m191_uranus_bigtts", "云舟 2.0"),
     ("zh_male_taocheng_uranus_bigtts", "小天 2.0"),
     ("zh_male_shenyeboke_uranus_bigtts", "深夜播客 2.0"),
+    ("zh_male_youyoujunzi_uranus_bigtts", "悠悠君子 2.0"),
+    ("zh_female_shuangkuaisisi_uranus_bigtts", "爽快思思 2.0"),
+    ("zh_female_cancan_uranus_bigtts", "知性灿灿 2.0"),
     ("en_male_tim_uranus_bigtts", "Tim"),
     ("en_female_dacey_uranus_bigtts", "Dacey"),
 ];

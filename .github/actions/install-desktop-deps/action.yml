@@ -3,6 +3,30 @@ description: Installs desktop-specific dependencies for the current platform
 runs:
   using: "composite"
   steps:
+    - name: Select a reachable Ubuntu package mirror
+      if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' }}
+      shell: bash
+      run: |
+        . /etc/os-release
+        if [[ "${ID:-}" != ubuntu || "${VERSION_CODENAME:-}" != noble ]]; then
+          exit 0
+        fi
+        for mirror in https://archive.ubuntu.com/ubuntu https://mirrors.mit.edu/ubuntu https://mirrors.edge.kernel.org/ubuntu; do
+          if curl -fsSL --max-time 15 "$mirror/dists/noble/InRelease" -o /dev/null &&
+             curl -fsSL --max-time 15 "$mirror/dists/noble-security/InRelease" -o /dev/null; then
+            sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<EOF
+        Types: deb
+        URIs: $mirror
+        Suites: noble noble-updates noble-backports noble-security
+        Components: main restricted universe multiverse
+        Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+        EOF
+            echo "Using Ubuntu package mirror $mirror"
+            exit 0
+          fi
+        done
+        exit 1
+
     - name: install dependencies (ubuntu only)
       if: ${{ runner.os == 'Linux' }}
       shell: bash

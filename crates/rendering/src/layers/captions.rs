@@ -67,6 +67,15 @@ pub enum CaptionPosition {
     Manual,
 }
 
+fn caption_weight(weight: u32) -> Weight {
+    match weight {
+        700.. => Weight::BOLD,
+        600..=699 => Weight::SEMIBOLD,
+        500..=599 => Weight::MEDIUM,
+        _ => Weight::NORMAL,
+    }
+}
+
 impl CaptionPosition {
     fn from_str(s: &str) -> Self {
         match s {
@@ -1069,13 +1078,7 @@ impl CaptionsLayer {
             &caption_text,
         );
 
-        let weight = if primary_appearance.font_weight >= 700 {
-            Weight::BOLD
-        } else if primary_appearance.font_weight >= 500 {
-            Weight::MEDIUM
-        } else {
-            Weight::NORMAL
-        };
+        let weight = caption_weight(primary_appearance.font_weight);
 
         let base_alpha = (fade_opacity * BASE_TEXT_OPACITY).clamp(0.0, 1.0);
         let highlight_alpha = fade_opacity.clamp(0.0, 1.0);
@@ -1145,13 +1148,7 @@ impl CaptionsLayer {
             translation_appearance.outline && translation_outline_width > 0.;
         let translation_has_shadow =
             translation_appearance.shadow && translation_shadow_strength > 0.;
-        let translation_weight = if translation_appearance.font_weight >= 700 {
-            Weight::BOLD
-        } else if translation_appearance.font_weight >= 500 {
-            Weight::MEDIUM
-        } else {
-            Weight::NORMAL
-        };
+        let translation_weight = caption_weight(translation_appearance.font_weight);
         let secondary_layout = secondary.as_ref().map(|(text, style)| {
             let secondary_size = style.size.max(1) as f32 * (height as f32 / 1080.0);
             let family = resolve_caption_family(

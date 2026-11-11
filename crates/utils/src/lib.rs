@@ -26,6 +26,8 @@ pub mod operation_diagnostics;
 pub mod process;
 #[cfg(feature = "speech")]
 pub mod speech;
+#[cfg(windows)]
+pub mod windows_credentials;
 
 /// Wrapper around tokio::spawn that inherits the current tracing subscriber and span.
 pub fn spawn_actor<F>(future: F) -> tokio::task::JoinHandle<F::Output>

@@ -2898,6 +2898,58 @@ impl CaptionAppearance {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum CaptionTemplate {
+    ScreenRecording,
+    TechTutorial,
+    Documentary,
+}
+
+impl CaptionTemplate {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::ScreenRecording => "screen-recording",
+            Self::TechTutorial => "tech-tutorial",
+            Self::Documentary => "documentary",
+        }
+    }
+
+    pub fn apply(self, settings: &mut CaptionSettings) {
+        let (source, translation, outline) = match self {
+            Self::ScreenRecording => (("Noto Sans SC", 44, 700), ("Inter", 34, 500), 3.5),
+            Self::TechTutorial => (("Sarasa Gothic SC", 44, 700), ("Montserrat", 34, 500), 4.0),
+            Self::Documentary => (("Noto Serif SC", 46, 500), ("Source Serif 4", 35, 600), 2.8),
+        };
+        let appearance = CaptionAppearance {
+            color: "#FFFFFF".into(),
+            outline: true,
+            outline_color: "#161616".into(),
+            outline_width: outline,
+            font_weight: source.2,
+            ..Default::default()
+        };
+        appearance.apply_to(settings);
+        settings.preset = self.id().into();
+        settings.font = source.0.into();
+        settings.size = source.1;
+        settings.translation_style = Some(CaptionTextStyle {
+            font: translation.0.into(),
+            size: translation.1,
+        });
+        settings.translation_appearance = Some(CaptionAppearance {
+            font_weight: translation.2,
+            ..appearance
+        });
+        settings.background_opacity = 0;
+        settings.translation_gap = Some(8);
+        settings.bottom_margin = Some(76);
+        settings.italic = false;
+        settings.active_word_highlight = false;
+        settings.animation = "none".into();
+        settings.fade_duration = 0.12;
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CaptionSettings {
@@ -2964,6 +3016,12 @@ pub struct CaptionSettings {
 }
 
 impl CaptionSettings {
+    pub fn for_new_captions() -> Self {
+        let mut settings = Self::default();
+        CaptionTemplate::ScreenRecording.apply(&mut settings);
+        settings
+    }
+
     pub fn source_appearance(&self) -> CaptionAppearance {
         CaptionAppearance {
             color: self.color.clone(),

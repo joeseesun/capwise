@@ -2601,6 +2601,12 @@ qwen = "Qwen3-ASR 0.6B"
 qwen_description = "中国語ナレーション向け · ローカルで実行"
 
 [editor.tabs.captions.preset]
+screen_recording = "画面収録"
+screen_recording_description = "Noto Sans SC と Inter に細い縁取り"
+tech_tutorial = "技術チュートリアル"
+tech_tutorial_description = "Sarasa Gothic SC と Montserrat にくっきりした縁取り"
+documentary = "ドキュメンタリー"
+documentary_description = "Noto Serif SC と Source Serif 4 に細い縁取り"
 dark_background = "柔らかな黒背景"
 light_background = "すっきりした白背景"
 classic = "やわらかな黒背景"

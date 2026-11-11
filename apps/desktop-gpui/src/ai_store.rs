@@ -129,7 +129,12 @@ fn keychain_get(service: &str, account: &str) -> Option<String> {
         .filter(|key| !key.is_empty())
 }
 
-#[cfg(all(not(target_os = "macos"), not(test)))]
+#[cfg(all(windows, not(test)))]
+fn keychain_get(service: &str, account: &str) -> Option<String> {
+    cap_utils::windows_credentials::read(service, account)
+}
+
+#[cfg(all(not(any(target_os = "macos", windows)), not(test)))]
 fn keychain_get(_service: &str, _account: &str) -> Option<String> {
     None
 }
@@ -215,7 +220,12 @@ fn set_key_uncached(kind: Kind, id: &str, key: &str) -> Result<(), String> {
             format!("{} ({status}): {error}", tr::asr::keychain_failed())
         })
     }
-    #[cfg(all(not(target_os = "macos"), not(test)))]
+    #[cfg(all(windows, not(test)))]
+    {
+        cap_utils::windows_credentials::write(KEYCHAIN_SERVICE, &account(kind, id), key)
+            .map_err(|error| format!("{}: {error}", tr::asr::keychain_failed()))
+    }
+    #[cfg(all(not(any(target_os = "macos", windows)), not(test)))]
     {
         let _ = (kind, id, key);
         Err(tr::asr::keychain_failed().to_string())
@@ -273,7 +283,12 @@ fn delete_key(kind: Kind, id: &str) -> Result<(), String> {
                 Err(_) => Err(tr::asr::keychain_failed().to_string()),
             }
         }
-        #[cfg(all(not(target_os = "macos"), not(test)))]
+        #[cfg(all(windows, not(test)))]
+        {
+            cap_utils::windows_credentials::delete(KEYCHAIN_SERVICE, &account(kind, id))
+                .map_err(|_| tr::asr::keychain_failed().to_string())
+        }
+        #[cfg(all(not(any(target_os = "macos", windows)), not(test)))]
         Err(tr::asr::keychain_failed().to_string())
     })
 }

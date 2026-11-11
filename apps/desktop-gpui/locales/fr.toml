@@ -2601,6 +2601,12 @@ qwen = "Qwen3-ASR 0.6B"
 qwen_description = "Pour la narration en chinois · exécution locale"
 
 [editor.tabs.captions.preset]
+screen_recording = "Capture d’écran"
+screen_recording_description = "Noto Sans SC et Inter avec un contour fin"
+tech_tutorial = "Tutoriel technique"
+tech_tutorial_description = "Sarasa Gothic SC et Montserrat avec un contour plus marqué"
+documentary = "Documentaire"
+documentary_description = "Noto Serif SC et Source Serif 4 avec un contour fin"
 dark_background = "Fond noir discret"
 light_background = "Fond blanc épuré"
 classic = "Fond noir discret"

@@ -2657,6 +2657,10 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
 
     let adapter_info = adapter.get_info();
     let is_software_adapter = is_software_wgpu_adapter(&adapter_info);
+    #[cfg(target_os = "windows")]
+    if !is_software_adapter {
+        pin_capture_adapter_to_renderer(&device);
+    }
     if is_software_adapter {
         tracing::warn!(
             adapter_name = adapter_info.name,
@@ -2725,6 +2729,19 @@ async fn try_rendering_device(
             );
             Err(error)
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn pin_capture_adapter_to_renderer(device: &wgpu::Device) {
+    // SAFETY: the DX12 device is borrowed only to read its LUID.
+    let luid = unsafe {
+        device.as_hal::<wgpu_hal::api::Dx12, _, _>(|device| {
+            device.map(|device| device.raw_device().GetAdapterLuid())
+        })
+    };
+    if let Some(luid) = luid {
+        cap_d3d_adapter::set_preferred_capture_luid(luid.LowPart, luid.HighPart);
     }
 }
 

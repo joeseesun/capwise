@@ -387,7 +387,16 @@ fn speech_key(reuse_recognition: bool) -> Option<String> {
                 .flatten()
         })
     });
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    let env = env.or_else(|| {
+        let read = cap_utils::windows_credentials::read;
+        read(speech::KEYCHAIN_SERVICE, speech::KEYCHAIN_ACCOUNT).or_else(|| {
+            reuse_recognition
+                .then(|| read(speech::KEYCHAIN_SERVICE, speech::RECOGNITION_ACCOUNT))
+                .flatten()
+        })
+    });
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = reuse_recognition;
     env
 }

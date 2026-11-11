@@ -257,3 +257,30 @@ fn source_size_changes_preserve_translation_outline_size() {
     settings.edit_source_appearance(|a| a.outline_width = 2.);
     assert_eq!(settings.resolved_translation_appearance(), appearance);
 }
+
+#[test]
+fn caption_templates_preserve_content_and_legacy_defaults() {
+    use crate::CaptionTemplate;
+
+    let legacy: CaptionSettings = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+    assert_eq!(legacy.preset, "classic");
+    assert_eq!(legacy.size, 24);
+    assert_eq!(legacy.background_opacity, 90);
+
+    let mut settings = CaptionSettings::for_new_captions();
+    assert_eq!(settings.preset, "screen-recording");
+    assert_eq!(settings.background_opacity, 0);
+    assert_eq!(settings.font, "Noto Sans SC");
+    assert_eq!(settings.resolved_translation_style().font, "Inter");
+    settings.enabled = true;
+    settings.export_with_subtitles = true;
+    settings.display_mode = crate::CaptionDisplayMode::Bilingual;
+    settings.set_translation("caption", "你好", "Hello".into(), "en".into());
+    CaptionTemplate::TechTutorial.apply(&mut settings);
+    let saved = serde_json::to_string(&settings).unwrap();
+    let restored: CaptionSettings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.background_opacity, 0);
+    assert_eq!(restored.translations, settings.translations);
+    assert_eq!(restored.display_mode, crate::CaptionDisplayMode::Bilingual);
+    assert!(restored.enabled && restored.export_with_subtitles);
+}

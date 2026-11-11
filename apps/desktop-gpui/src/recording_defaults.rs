@@ -299,11 +299,13 @@ pub(crate) fn prepare_project(
         has_camera,
         inputs.camera_preference,
     );
-    let captions = project.captions.get_or_insert_with(Default::default);
+    let captions = project
+        .captions
+        .get_or_insert_with(|| cap_project::CaptionsData {
+            settings: crate::style_presets::new_caption_settings(),
+            ..Default::default()
+        });
     captions.settings.enabled = true;
-    if captions.settings.font == "System Sans-Serif" {
-        captions.settings.font = "Noto Sans SC".to_string();
-    }
     inputs.studio_layout.apply(&mut project, has_camera);
     if inputs.auto_zoom
         && project

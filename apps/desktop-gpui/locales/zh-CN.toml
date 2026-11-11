@@ -2637,6 +2637,12 @@ small = "Whisper Small"
 small_description = "下载较小 · 本地多语言识别"
 
 [editor.tabs.captions.preset]
+screen_recording = "通用录屏"
+screen_recording_description = "Noto Sans SC 搭配 Inter，细描边"
+tech_tutorial = "科技教程"
+tech_tutorial_description = "更纱黑体搭配 Montserrat，描边更清晰"
+documentary = "纪录片"
+documentary_description = "Noto Serif SC 搭配 Source Serif 4，细描边"
 dark_background = "柔和黑底"
 light_background = "清爽白底"
 white_outline = "白字 · 黑描边"
