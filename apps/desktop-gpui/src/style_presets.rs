@@ -1190,7 +1190,11 @@ pub fn new_style_segment(start: f64, end: f64, track: u32) -> cap_project::Style
 }
 
 pub(crate) fn new_caption_settings() -> CaptionSettings {
-    CaptionSettings::for_new_captions()
+    CaptionSettings {
+        position: "manual".into(),
+        manual_position: Some(cap_project::XY::new(0.5, 0.85)),
+        ..CaptionSettings::for_new_captions()
+    }
 }
 
 pub fn seed_default_captions(project: &mut ProjectConfiguration) {
