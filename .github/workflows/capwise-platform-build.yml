@@ -52,25 +52,6 @@ jobs:
         with:
           node-version: 24
 
-      - name: Select a reachable Ubuntu package mirror
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          for mirror in https://archive.ubuntu.com/ubuntu https://mirrors.mit.edu/ubuntu https://mirrors.edge.kernel.org/ubuntu; do
-            if curl -fsSL --max-time 15 "$mirror/dists/noble/InRelease" -o /dev/null &&
-               curl -fsSL --max-time 15 "$mirror/dists/noble-security/InRelease" -o /dev/null; then
-              sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<EOF
-          Types: deb
-          URIs: $mirror
-          Suites: noble noble-updates noble-backports noble-security
-          Components: main restricted universe multiverse
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          EOF
-              exit 0
-            fi
-          done
-          exit 1
-
       - uses: ./.github/actions/install-desktop-deps
         if: runner.os == 'Linux'
         timeout-minutes: 12

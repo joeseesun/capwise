@@ -68,7 +68,6 @@ fn editing_source_size_first_preserves_translation_font_and_size() {
     let mut settings = source();
     settings.set_source_font_size(60);
     assert_eq!(settings.font, "Noto Sans SC");
-    assert_eq!(settings.background_opacity, 0);
     assert_eq!(settings.size, 60);
     assert_eq!(
         settings.resolved_translation_style(),
@@ -270,6 +269,7 @@ fn caption_templates_preserve_content_and_legacy_defaults() {
 
     let mut settings = CaptionSettings::for_new_captions();
     assert_eq!(settings.preset, "screen-recording");
+    assert_eq!(settings.background_opacity, 0);
     assert_eq!(settings.font, "Noto Sans SC");
     assert_eq!(settings.resolved_translation_style().font, "Inter");
     settings.enabled = true;
