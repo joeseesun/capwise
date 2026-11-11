@@ -26,6 +26,35 @@ fn low_pass(hz: f32, dt: f32) -> f32 {
 }
 
 #[derive(Default)]
+pub(super) struct EyeFilter {
+    open_ratio: Option<f32>,
+    last_sample: Option<(f64, f32)>,
+}
+
+impl EyeFilter {
+    pub(super) fn update(&mut self, observed: Option<f32>, time: f64) -> f32 {
+        let Some(ratio) = observed.filter(|ratio| (0.0..=0.48).contains(ratio)) else {
+            return self
+                .last_sample
+                .filter(|(last, _)| (0.0..=0.12).contains(&(time - last)))
+                .map_or(1., |(_, opening)| opening);
+        };
+        match &mut self.open_ratio {
+            Some(reference) if ratio >= *reference * 0.82 => {
+                let difference = (ratio - *reference).clamp(-0.025, 0.04);
+                *reference = (*reference + difference * 0.06).clamp(0.13, 0.4);
+            }
+            None if ratio >= 0.11 => self.open_ratio = Some(ratio.clamp(0.13, 0.4)),
+            _ => {}
+        }
+        let relative_opening = ratio / self.open_ratio.unwrap_or(0.24);
+        let opening = ((relative_opening - 0.36) / 0.5).clamp(0., 1.);
+        self.last_sample = Some((time, opening));
+        opening
+    }
+}
+
+#[derive(Default)]
 pub(super) struct HeadFilter {
     axes: [Axis; 3],
     last_sample: Option<f64>,
@@ -63,6 +92,41 @@ impl HeadFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eye_calibrates_at_rest_and_recovers_after_repeated_blinks() {
+        for rest in [0.13, 0.19, 0.32] {
+            let mut eye = EyeFilter::default();
+            assert_eq!(eye.update(Some(rest), 0.), 1.);
+            for frame in 1..=30 {
+                let time = f64::from(frame) / 30.;
+                assert_eq!(eye.update(Some(rest * 0.28), time), 0.);
+                assert_eq!(eye.update(Some(rest), time + 0.01), 1.);
+            }
+        }
+    }
+
+    #[test]
+    fn eye_does_not_calibrate_from_a_closed_lid_or_invalid_landmarks() {
+        let mut eye = EyeFilter::default();
+        assert_eq!(eye.update(Some(0.05), 0.), 0.);
+        assert_eq!(eye.update(Some(f32::NAN), 0.03), 0.);
+        assert_eq!(eye.update(None, 0.10), 0.);
+        assert_eq!(eye.update(None, 0.15), 1.);
+        assert_eq!(eye.update(Some(0.17), 0.18), 1.);
+    }
+
+    #[test]
+    fn a_wink_and_landmark_loss_do_not_move_the_other_eye() {
+        let [mut left, mut right] = [EyeFilter::default(), EyeFilter::default()];
+        assert_eq!(left.update(Some(0.17), 0.), 1.);
+        assert_eq!(right.update(Some(0.23), 0.), 1.);
+        assert_eq!(left.update(Some(0.04), 0.03), 0.);
+        assert_eq!(right.update(Some(0.22), 0.03), 1.);
+        assert_eq!(left.update(None, 0.06), 0.);
+        assert_eq!(right.update(Some(0.23), 0.06), 1.);
+        assert_eq!(left.update(Some(0.17), 0.09), 1.);
+    }
 
     #[test]
     fn head_filter_reduces_stationary_jitter_and_follows_a_turn() {
