@@ -145,6 +145,12 @@ jobs:
           mkdir -p ../../candidate
           cp "${installers[0]}" ../../candidate/Capwise-Windows-x64-Setup.exe
 
+      - name: Verify Windows credentials and adapter selection
+        if: runner.os == 'Windows'
+        run: |
+          cargo test --locked -p cap-utils --lib windows_credentials
+          cargo test --locked -p cap-d3d-adapter --lib
+
       - name: Verify installed Windows candidate
         if: runner.os == 'Windows'
         shell: pwsh

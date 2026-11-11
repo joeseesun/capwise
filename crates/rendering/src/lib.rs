@@ -31,8 +31,6 @@ use std::sync::{
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
-#[cfg(target_os = "windows")]
-pub mod adapter_luid;
 pub mod camera3d;
 pub mod composite_frame;
 mod coord;
@@ -2659,6 +2657,10 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
 
     let adapter_info = adapter.get_info();
     let is_software_adapter = is_software_wgpu_adapter(&adapter_info);
+    #[cfg(target_os = "windows")]
+    if !is_software_adapter {
+        pin_capture_adapter_to_renderer(&device);
+    }
     if is_software_adapter {
         tracing::warn!(
             adapter_name = adapter_info.name,
@@ -2730,29 +2732,23 @@ async fn try_rendering_device(
     }
 }
 
-/// The capture, encoder and decoder each create their own D3D11 device and
-/// would otherwise all pick "the adapter with most VRAM", which can differ
-/// from wgpu's adapter on hybrid-GPU machines. Pin them to wgpu's LUID once.
 #[cfg(target_os = "windows")]
-fn pin_capture_adapter_to_renderer(adapter: &wgpu::Adapter) {
-    if let Some(luid) = adapter_luid::detect_adapter_luid_for_wgpu(adapter) {
-        cap_d3d_adapter::set_preferred_capture_luid(luid.low, luid.high);
-        tracing::debug!(
-            low = luid.low,
-            high = luid.high,
-            "pinned capture adapter LUID"
-        );
+fn pin_capture_adapter_to_renderer(device: &wgpu::Device) {
+    // SAFETY: the DX12 device is borrowed only to read its LUID.
+    let luid = unsafe {
+        device.as_hal::<wgpu_hal::api::Dx12, _, _>(|device| {
+            device.map(|device| device.raw_device().GetAdapterLuid())
+        })
+    };
+    if let Some(luid) = luid {
+        cap_d3d_adapter::set_preferred_capture_luid(luid.LowPart, luid.HighPart);
     }
 }
-
-#[cfg(not(target_os = "windows"))]
-fn pin_capture_adapter_to_renderer(_: &wgpu::Adapter) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn request_rendering_device(
     adapter: &wgpu::Adapter,
 ) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
-    pin_capture_adapter_to_renderer(adapter);
     let mut required_features = wgpu::Features::empty();
     if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
         required_features |= wgpu::Features::PIPELINE_CACHE;
