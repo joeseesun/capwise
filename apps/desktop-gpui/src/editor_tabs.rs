@@ -454,10 +454,16 @@ pub struct CaptionPreset {
     pub animation: &'static str,
     pub uppercase: bool,
     pub fade_duration: f32,
+    template: Option<cap_project::CaptionTemplate>,
 }
 
 impl CaptionPreset {
     fn apply(&self, settings: &mut CaptionSettings) {
+        if let Some(template) = self.template {
+            template.apply(settings);
+            return;
+        }
+        settings.background_mode = Default::default();
         settings.set_source_font_size(self.size);
         settings.preset = self.id.to_string();
         settings.font_weight = self.font_weight;
@@ -480,25 +486,28 @@ impl CaptionPreset {
     }
 }
 
+const CLASSIC_CAPTION_PRESET: CaptionPreset = CaptionPreset {
+    id: "classic",
+    label: tr::editor::tabs::captions::preset::classic,
+    description: tr::editor::tabs::captions::preset::classic_description,
+    font_weight: 700,
+    size: 42,
+    color: "#FFFFFF",
+    background_color: "#000000",
+    background_opacity: 70,
+    outline: false,
+    outline_color: "#000000",
+    highlight_color: "#FFFFFF",
+    active_word_highlight: false,
+    highlight_style: "color",
+    animation: "none",
+    uppercase: false,
+    fade_duration: 0.2,
+    template: None,
+};
+
 pub static CAPTION_PRESETS: &[CaptionPreset] = &[
-    CaptionPreset {
-        id: "classic",
-        label: tr::editor::tabs::captions::preset::classic,
-        description: tr::editor::tabs::captions::preset::classic_description,
-        font_weight: 700,
-        size: 42,
-        color: "#FFFFFF",
-        background_color: "#000000",
-        background_opacity: 70,
-        outline: false,
-        outline_color: "#000000",
-        highlight_color: "#FFFFFF",
-        active_word_highlight: false,
-        highlight_style: "color",
-        animation: "none",
-        uppercase: false,
-        fade_duration: 0.2,
-    },
+    CLASSIC_CAPTION_PRESET,
     CaptionPreset {
         id: "karaoke",
         label: tr::editor::tabs::captions::preset::karaoke,
@@ -516,6 +525,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         animation: "none",
         uppercase: false,
         fade_duration: 0.12,
+        template: None,
     },
     CaptionPreset {
         id: "highlight",
@@ -534,6 +544,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         animation: "bounce",
         uppercase: true,
         fade_duration: 0.12,
+        template: None,
     },
     CaptionPreset {
         id: "pop",
@@ -552,6 +563,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         animation: "pop",
         uppercase: true,
         fade_duration: 0.18,
+        template: None,
     },
     CaptionPreset {
         id: "minimal",
@@ -570,6 +582,31 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         animation: "none",
         uppercase: false,
         fade_duration: 0.25,
+        template: None,
+    },
+];
+
+const BILINGUAL_CAPTION_PRESETS: &[CaptionPreset] = &[
+    CaptionPreset {
+        id: cap_project::CaptionTemplate::ScreenRecording.id(),
+        label: tr::editor::tabs::captions::preset::screen_recording,
+        description: tr::editor::tabs::captions::preset::screen_recording_description,
+        template: Some(cap_project::CaptionTemplate::ScreenRecording),
+        ..CLASSIC_CAPTION_PRESET
+    },
+    CaptionPreset {
+        id: cap_project::CaptionTemplate::TechTutorial.id(),
+        label: tr::editor::tabs::captions::preset::tech_tutorial,
+        description: tr::editor::tabs::captions::preset::tech_tutorial_description,
+        template: Some(cap_project::CaptionTemplate::TechTutorial),
+        ..CLASSIC_CAPTION_PRESET
+    },
+    CaptionPreset {
+        id: cap_project::CaptionTemplate::Documentary.id(),
+        label: tr::editor::tabs::captions::preset::documentary,
+        description: tr::editor::tabs::captions::preset::documentary_description,
+        template: Some(cap_project::CaptionTemplate::Documentary),
+        ..CLASSIC_CAPTION_PRESET
     },
 ];
 
@@ -624,6 +661,7 @@ const QUICK_CAPTION_PRESETS: [QuickCaptionPreset; 4] = [
 
 impl QuickCaptionPreset {
     fn apply(&self, settings: &mut CaptionSettings) {
+        settings.background_mode = Default::default();
         settings.preset = self.id.to_string();
         settings.font_weight = 700;
         settings.color = self.color.to_string();
@@ -4319,7 +4357,7 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(10.))
-            .child(choices)
+            .child(self.render_caption_presets(settings, BILINGUAL_CAPTION_PRESETS, cx))
             .child(crate::editor_sidebar::disclosure_row(
                 &theme,
                 "caption-more-styles",
@@ -4330,11 +4368,14 @@ impl EditorWindow {
                     this.invalidate_sidebar(cx);
                 }),
             ))
-            .children(
-                self.sidebar
-                    .caption_more_styles
-                    .then(|| self.render_caption_presets(settings, cx)),
-            )
+            .children(self.sidebar.caption_more_styles.then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(choices)
+                    .child(self.render_caption_presets(settings, CAPTION_PRESETS, cx))
+            }))
             .child(
                 div()
                     .flex()
@@ -4485,16 +4526,31 @@ impl EditorWindow {
                                 px((f32::from(bounds.size.width) - layout.width) / 2.),
                                 px((f32::from(bounds.size.height) - layout.height) / 2.),
                             );
-                        window.paint_quad(
-                            gpui::fill(
-                                Bounds::new(
-                                    origin,
-                                    gpui::size(px(layout.width), px(layout.height)),
+                        if settings.background_mode
+                            == cap_project::CaptionBackgroundMode::EdgeGradient
+                        {
+                            let mut transparent = background;
+                            transparent.a = 0.;
+                            window.paint_quad(gpui::fill(
+                                bounds,
+                                gpui::linear_gradient(
+                                    180.,
+                                    gpui::linear_color_stop(transparent, 0.),
+                                    gpui::linear_color_stop(background, 0.9),
                                 ),
-                                background,
-                            )
-                            .corner_radii(px(layout.radius)),
-                        );
+                            ));
+                        } else {
+                            window.paint_quad(
+                                gpui::fill(
+                                    Bounds::new(
+                                        origin,
+                                        gpui::size(px(layout.width), px(layout.height)),
+                                    ),
+                                    background,
+                                )
+                                .corner_radii(px(layout.radius)),
+                            );
+                        }
                         let mut top = origin.y + px(layout.padding);
                         for (index, line) in lines.iter().enumerate() {
                             let appearance = &line.appearance;
@@ -4569,6 +4625,7 @@ impl EditorWindow {
     fn render_caption_presets(
         &self,
         settings: &CaptionSettings,
+        presets: &'static [CaptionPreset],
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -4579,7 +4636,7 @@ impl EditorWindow {
             .flex_row()
             .flex_wrap()
             .gap(px(8.))
-            .children(CAPTION_PRESETS.iter().enumerate().map(|(index, preset)| {
+            .children(presets.iter().map(|preset| {
                 let selected = active == preset.id;
                 div()
                     .id(SharedString::from(format!("caption-preset-{}", preset.id)))
@@ -4621,7 +4678,7 @@ impl EditorWindow {
                         move |_window, cx| ui::Tooltip::new(&theme, description.clone()).view(cx)
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.apply_caption_preset(index, window, cx);
+                        this.apply_caption_preset(preset, window, cx);
                     }))
             }))
             .into_any_element()
@@ -4630,13 +4687,18 @@ impl EditorWindow {
     fn caption_preset_preview(&self, preset: &CaptionPreset) -> AnyElement {
         let mut settings = caption_settings(&self.project);
         preset.apply(&mut settings);
+        if preset.template.is_some() {
+            settings.display_mode = CaptionDisplayMode::Bilingual;
+        }
         self.caption_style_preview(&settings)
     }
 
-    fn apply_caption_preset(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(preset) = CAPTION_PRESETS.get(index) else {
-            return;
-        };
+    fn apply_caption_preset(
+        &mut self,
+        preset: &'static CaptionPreset,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.edit_project_global("caption-preset", window, cx, move |project| {
             // Unlike the keyboard tab, the source's caption setters bail when
             // there is no captions block. `applyCaptionPreset` goes through the

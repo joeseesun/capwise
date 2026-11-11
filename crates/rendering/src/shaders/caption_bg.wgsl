@@ -2,7 +2,7 @@ struct BackgroundUniforms {
     rect: vec4<f32>,
     color: vec4<f32>,
     radius: f32,
-    _padding: vec3<f32>,
+    gradient: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: BackgroundUniforms;
@@ -44,6 +44,12 @@ fn squircle_sdf(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
 
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    if uniforms.gradient.x != 0.0 {
+        let ramp = smoothstep(uniforms.gradient.y, uniforms.gradient.z, position.y);
+        let alpha = select(1.0 - ramp, ramp, uniforms.gradient.x > 0.0);
+        return vec4<f32>(uniforms.color.rgb, uniforms.color.a * alpha);
+    }
+
     let rect_min = uniforms.rect.xy;
     let rect_size = uniforms.rect.zw;
     let rect_center = rect_min + rect_size * 0.5;

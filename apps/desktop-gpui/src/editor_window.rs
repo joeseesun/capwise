@@ -8918,9 +8918,14 @@ impl EditorWindow {
         match kind {
             TrackKind::Caption => {
                 self.edit_project("caption-enabled", window, cx, move |project| {
-                    let captions = project
-                        .captions
-                        .get_or_insert_with(cap_project::CaptionsData::default);
+                    crate::style_presets::seed_default_captions(project);
+                    let captions =
+                        project
+                            .captions
+                            .get_or_insert_with(|| cap_project::CaptionsData {
+                                settings: crate::style_presets::new_caption_settings(),
+                                ..Default::default()
+                            });
                     if captions.settings.enabled == next {
                         return false;
                     }

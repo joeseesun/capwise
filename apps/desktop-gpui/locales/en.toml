@@ -2639,6 +2639,12 @@ small = "Whisper Small"
 small_description = "Smaller download · local multilingual recognition"
 
 [editor.tabs.captions.preset]
+screen_recording = "Screen Recording"
+screen_recording_description = "Sans-serif subtitles on a translucent rounded background"
+tech_tutorial = "Tech Tutorial"
+tech_tutorial_description = "Crisp sans-serif subtitles over an edge gradient"
+documentary = "Documentary"
+documentary_description = "Serif subtitles on a translucent rounded background"
 dark_background = "Soft black background"
 light_background = "Clean white background"
 white_outline = "White · black outline"

@@ -608,3 +608,85 @@ fn independent_caption_appearance_renders_source_and_translation_without_cache_c
         ),
     );
 }
+
+#[test]
+fn bundled_bilingual_templates_render_the_selected_faces_and_backgrounds() {
+    use cap_project::{CaptionBackgroundMode, CaptionTemplate};
+
+    let size = XY::new(640, 480);
+    let constants = constants(size);
+    let segment = segment("清晰表达每一步");
+    let mut settings = settings(&segment.text, "Make every step clear");
+    let mut layer = layer(&constants);
+    for bytes in [
+        include_bytes!("../../../../../apps/desktop-gpui/assets/caption-fonts/NotoSansSC-Bold.otf")
+            .as_slice(),
+        include_bytes!("../../../../../apps/desktop-gpui/assets/caption-fonts/Inter-Medium.ttf")
+            .as_slice(),
+        include_bytes!(
+            "../../../../../apps/desktop-gpui/assets/caption-fonts/SarasaGothicSC-Bold.ttf"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../../apps/desktop-gpui/assets/caption-fonts/Montserrat-Medium.ttf"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../../apps/desktop-gpui/assets/caption-fonts/NotoSerifSC-Medium.otf"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../../apps/desktop-gpui/assets/caption-fonts/SourceSerif4-Semibold.ttf"
+        )
+        .as_slice(),
+    ] {
+        layer.font_system.db_mut().load_font_data(bytes.to_vec());
+    }
+    for (template, source, translation, edge_alpha) in [
+        (
+            CaptionTemplate::ScreenRecording,
+            ("Noto Sans SC", Weight::BOLD),
+            ("Inter", Weight::MEDIUM),
+            0,
+        ),
+        (
+            CaptionTemplate::TechTutorial,
+            ("Sarasa Gothic SC", Weight::BOLD),
+            ("Montserrat", Weight::MEDIUM),
+            199,
+        ),
+        (
+            CaptionTemplate::Documentary,
+            ("Noto Serif SC", Weight::MEDIUM),
+            ("Source Serif 4", Weight::SEMIBOLD),
+            0,
+        ),
+    ] {
+        template.apply(&mut settings);
+        let pixels = render(&constants, &mut layer, &settings, &segment, size);
+        for (text, (family, weight)) in [
+            (&layer.text, source),
+            (&layer.translation_text, translation),
+        ] {
+            let shaped = text.shaped.as_ref().unwrap();
+            assert_eq!(shaped.family, Family::Name(family));
+            assert_eq!(shaped.weight, weight);
+            assert!(
+                text.buffer
+                    .layout_runs()
+                    .flat_map(|run| run.glyphs)
+                    .all(|glyph| {
+                        let face = layer.font_system.db().face(glyph.font_id).unwrap();
+                        face.weight == weight
+                            && face.families.iter().any(|(name, _)| name == family)
+                    })
+            );
+        }
+        let alpha = |x: u32, y: u32| pixels[((y * size.x + x) * 4 + 3) as usize];
+        assert_eq!(alpha(2, 2), 0);
+        assert!(alpha(2, size.y - 2).abs_diff(edge_alpha) <= 1);
+        if settings.background_mode == CaptionBackgroundMode::EdgeGradient {
+            assert!(alpha(2, 380) > 0 && alpha(2, 380) < edge_alpha);
+        }
+    }
+}

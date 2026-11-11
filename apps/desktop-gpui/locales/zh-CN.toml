@@ -2637,6 +2637,12 @@ small = "Whisper Small"
 small_description = "下载较小 · 本地多语言识别"
 
 [editor.tabs.captions.preset]
+screen_recording = "通用录屏"
+screen_recording_description = "无衬线字体，搭配半透明圆角底板"
+tech_tutorial = "科技教程"
+tech_tutorial_description = "利落的无衬线字体，搭配边缘渐变"
+documentary = "纪录片"
+documentary_description = "衬线字体，搭配半透明圆角底板"
 dark_background = "柔和黑底"
 light_background = "清爽白底"
 white_outline = "白字 · 黑描边"

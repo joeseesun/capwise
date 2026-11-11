@@ -764,6 +764,30 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::captions::model_label(), "Model"),
         (tr::editor::tabs::captions::position(), "Subtitle Position"),
         (
+            tr::editor::tabs::captions::preset::screen_recording(),
+            "Screen Recording",
+        ),
+        (
+            tr::editor::tabs::captions::preset::screen_recording_description(),
+            "Sans-serif subtitles on a translucent rounded background",
+        ),
+        (
+            tr::editor::tabs::captions::preset::tech_tutorial(),
+            "Tech Tutorial",
+        ),
+        (
+            tr::editor::tabs::captions::preset::tech_tutorial_description(),
+            "Crisp sans-serif subtitles over an edge gradient",
+        ),
+        (
+            tr::editor::tabs::captions::preset::documentary(),
+            "Documentary",
+        ),
+        (
+            tr::editor::tabs::captions::preset::documentary_description(),
+            "Serif subtitles on a translucent rounded background",
+        ),
+        (
             tr::editor::tabs::captions::preset::classic(),
             "Soft black background",
         ),

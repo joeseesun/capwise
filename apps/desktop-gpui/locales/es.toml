@@ -2601,6 +2601,12 @@ qwen = "Qwen3-ASR 0.6B"
 qwen_description = "Para narraciones en chino · se ejecuta localmente"
 
 [editor.tabs.captions.preset]
+screen_recording = "Grabación de pantalla"
+screen_recording_description = "Subtítulos sin serifa sobre un fondo redondeado y translúcido"
+tech_tutorial = "Tutorial técnico"
+tech_tutorial_description = "Subtítulos nítidos sin serifa con un degradado hacia el borde"
+documentary = "Documental"
+documentary_description = "Subtítulos con serifa sobre un fondo redondeado y translúcido"
 dark_background = "Fondo negro suave"
 light_background = "Fondo blanco limpio"
 classic = "Fondo negro suave"

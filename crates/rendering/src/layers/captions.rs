@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
-use cap_project::{CaptionWord, XY, caption_words::caption_display_segment};
+use cap_project::{CaptionBackgroundMode, CaptionWord, XY, caption_words::caption_display_segment};
 use glyphon::cosmic_text::LayoutRunIter;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
@@ -53,7 +53,7 @@ struct CaptionBackgroundUniforms {
     color: [f32; 4],
     radius: f32,
     _padding: [f32; 3],
-    _padding2: [f32; 4],
+    gradient: [f32; 4],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -655,6 +655,7 @@ pub struct CaptionsLayer {
     background_bind_group: wgpu::BindGroup,
     background_uniform_buffer: wgpu::Buffer,
     background_scissor: Option<[u32; 4]>,
+    background_is_gradient: bool,
     highlight_bind_group: wgpu::BindGroup,
     highlight_uniform_buffer: wgpu::Buffer,
     highlight_scissor: Option<[u32; 4]>,
@@ -693,7 +694,7 @@ impl CaptionsLayer {
             color: [0.0; 4],
             radius: 0.0,
             _padding: [0.0; 3],
-            _padding2: [0.0; 4],
+            gradient: [0.0; 4],
         };
 
         let background_uniform_buffer =
@@ -803,6 +804,7 @@ impl CaptionsLayer {
             background_bind_group,
             background_uniform_buffer,
             background_scissor: None,
+            background_is_gradient: false,
             highlight_bind_group,
             highlight_uniform_buffer,
             highlight_scissor: None,
@@ -1479,6 +1481,22 @@ impl CaptionsLayer {
         });
         record_caption_center(position, resting, (width, height));
 
+        let gradient = match caption_data.settings.background_mode {
+            CaptionBackgroundMode::RoundedBox => [0.0; 4],
+            CaptionBackgroundMode::EdgeGradient => {
+                let frame_height = height as f32;
+                let feather = frame_height * 0.22;
+                let [_, top, _, box_height] = resting;
+                if top + box_height / 2.0 >= frame_height / 2.0 {
+                    let full_alpha_y = (top + box_height * 0.7).min(frame_height);
+                    [1.0, full_alpha_y - feather, full_alpha_y, 0.0]
+                } else {
+                    let full_alpha_y = (top + box_height * 0.3).max(0.0);
+                    [-1.0, full_alpha_y, full_alpha_y + feather, 0.0]
+                }
+            }
+        };
+
         let background_uniforms = CaptionBackgroundUniforms {
             rect,
             color: [
@@ -1491,7 +1509,7 @@ impl CaptionsLayer {
                 .min(draw_box_width / 2.0)
                 .min(draw_box_height / 2.0),
             _padding: [0.0; 3],
-            _padding2: [0.0; 4],
+            gradient,
         };
 
         queue.write_buffer(
@@ -1530,7 +1548,7 @@ impl CaptionsLayer {
                 ],
                 radius: pill_radius,
                 _padding: [0.0; 3],
-                _padding2: [0.0; 4],
+                gradient: [0.0; 4],
             };
             queue.write_buffer(
                 &self.highlight_uniform_buffer,
@@ -1594,6 +1612,7 @@ impl CaptionsLayer {
         }
 
         self.background_scissor = Some([scissor_x, scissor_y, scissor_width, scissor_height]);
+        self.background_is_gradient = gradient[0] != 0.0;
         self.has_caption = true;
     }
 
@@ -1615,7 +1634,11 @@ impl CaptionsLayer {
         }
 
         if let Some([x, y, width, height]) = self.background_scissor {
-            pass.set_scissor_rect(x, y, width, height);
+            if self.background_is_gradient {
+                pass.set_scissor_rect(0, 0, self.output_size.0, self.output_size.1);
+            } else {
+                pass.set_scissor_rect(x, y, width, height);
+            }
             pass.set_pipeline(&self.background_pipeline);
             pass.set_bind_group(0, &self.background_bind_group, &[]);
             pass.draw(0..6, 0..1);

@@ -2601,6 +2601,12 @@ qwen = "Qwen3-ASR 0.6B"
 qwen_description = "中国語ナレーション向け · ローカルで実行"
 
 [editor.tabs.captions.preset]
+screen_recording = "画面収録"
+screen_recording_description = "サンセリフ体と半透明の角丸背景"
+tech_tutorial = "技術チュートリアル"
+tech_tutorial_description = "読みやすいサンセリフ体と画面端のグラデーション"
+documentary = "ドキュメンタリー"
+documentary_description = "セリフ体と半透明の角丸背景"
 dark_background = "柔らかな黒背景"
 light_background = "すっきりした白背景"
 classic = "やわらかな黒背景"
