@@ -1,4 +1,8 @@
-use super::{AvatarKind, Pose, paint::Portrait, tracking::HeadFilter};
+use super::{
+    AvatarKind, Pose,
+    paint::Portrait,
+    tracking::{EyeFilter, HeadFilter},
+};
 use crate::NativeCameraFrame;
 use anyhow::{Context, anyhow};
 use cidre::{arc, cf, cm, cv, ns, vn, vt};
@@ -71,6 +75,7 @@ struct Renderer {
     last_frame: Option<(Instant, f64)>,
     frame_clock: f64,
     head_filter: HeadFilter,
+    eyes: [EyeFilter; 2],
     neutral_mouth_width: Option<f64>,
     last_face: Option<Instant>,
     tracking_active: bool,
@@ -91,6 +96,7 @@ impl Renderer {
             last_frame: None,
             frame_clock: 0.,
             head_filter: HeadFilter::default(),
+            eyes: [EyeFilter::default(), EyeFilter::default()],
             neutral_mouth_width: None,
             last_face: None,
             tracking_active: false,
@@ -185,8 +191,14 @@ impl Renderer {
             }
             Some((right - left, top - bottom, area.abs() * 0.5))
         };
-        let eye_opening =
-            |region| shape(region).map_or(0.25, |(width, height, _)| height / width.max(0.001));
+        let eye_ratio = |region| {
+            shape(region)
+                .filter(|(width, _, _)| *width > 0.001)
+                .map(|(width, height, _)| (height / width) as f32)
+        };
+        let [left_filter, right_filter] = &mut self.eyes;
+        let left_eye = left_filter.update(eye_ratio(left_eye), self.frame_clock);
+        let right_eye = right_filter.update(eye_ratio(right_eye), self.frame_clock);
         let outer_width = shape(landmarks.outer_lips()).map(|(width, _, _)| width);
         let mouth_opening = outer_width.zip(shape(landmarks.inner_lips())).map_or(
             0.,
@@ -215,8 +227,8 @@ impl Renderer {
                 .pitch()
                 .map_or(self.target.pitch, |v| v.as_f64() as f32 / 0.52),
             roll: face.roll().map_or(self.target.roll, |v| -v.as_f64() as f32),
-            left_eye: ((eye_opening(left_eye) - 0.08) / 0.19).clamp(0., 1.) as f32,
-            right_eye: ((eye_opening(right_eye) - 0.08) / 0.19).clamp(0., 1.) as f32,
+            left_eye,
+            right_eye,
             mouth: mouth_opening as f32,
             mouth_width: mouth_width as f32,
             smile: 0.,

@@ -969,8 +969,10 @@ on = "Ein"
 
 [main.error]
 camera_only_needs_camera = "Für reine Kameraaufnahmen muss eine Kamera ausgewählt sein."
+camera_unavailable = "Die ausgewählte Kamera ist nicht verfügbar. Verbinde sie erneut oder wähle eine andere Kamera."
 copy = "Fehler kopieren"
 devices_not_ready = "Die Aufnahmegeräte sind nicht bereit. Öffnen Sie den Rekorder und versuchen Sie es erneut."
+microphone_unavailable = "Das ausgewählte Mikrofon „{name}“ ist nicht verfügbar. Verbinde es erneut oder wähle ein anderes Mikrofon."
 title = "Etwas ist schiefgelaufen"
 
 [main.header]
@@ -1056,17 +1058,6 @@ title = "Unvollständige Aufnahme"
 nothing_saved = "Bevor diese Aufnahme endete, wurde kein Video gespeichert, daher gibt es nichts wiederherzustellen. Die Dateien befinden sich weiterhin in {path}."
 rebuild_failed = "Capwise konnte diese Aufnahme nicht wiederherstellen ({error}). Es wurde nichts gelöscht, die Originaldateien befinden sich in {path}."
 storage = "Es ist nicht genug Speicherplatz frei, um diese Aufnahme wiederherzustellen ({error}). Geben Sie Speicherplatz frei und klicken Sie erneut auf Wiederherstellen. Es wurde nichts gelöscht, die Dateien befinden sich in {path}."
-
-[main.sign_in]
-message = "Der Instant-Modus lädt schon während der Aufnahme hoch, sodass Ihr Link zum Teilen sofort nach dem Stoppen bereit ist."
-not_now = "Nicht jetzt"
-open_browser_again = "Browser erneut öffnen"
-pending_message = "Schließen Sie die Anmeldung bei Capwise in Ihrem Browser ab. Danach kehrt Capwise hierher zurück und öffnet den Rekorder."
-sign_in = "Anmelden"
-timed_out = "Zeitüberschreitung bei der Anmeldung. Versuchen Sie es erneut."
-title = "Melden Sie sich an, um den Instant-Modus zu nutzen"
-use_studio = "Studio verwenden"
-waiting = "Warten auf Ihren Browser"
 
 [main.storage]
 blocked = "Auf Ihrem Aufnahmelaufwerk sind nur {available} GB frei. Geben Sie Speicherplatz frei, sodass vor der Aufnahme mindestens 512 MB verfügbar sind."
@@ -1403,8 +1394,6 @@ starting = "Konvertierung wird gestartet..."
 display_fallback = "Bildschirm {id}"
 countdown_title = "Countdown vor der Aufnahme"
 countdown_body = "Nach dem Klick auf „Aufnahme starten“ einige Sekunden warten, bevor die Aufnahme beginnt."
-mode_title = "Aufnahmemodus ändern"
-mode_body = "Mit Instant erhalten Sie einen Link zum Teilen, sobald Sie die Aufnahme beenden. Studio nimmt in voller Qualität zur Bearbeitung auf."
 
 [overlay.area]
 split_ratio = "5:4 · Geteilt"
@@ -1441,12 +1430,7 @@ microphone_allow = "Mikrofonzugriff erlauben…"
 microphone_turn_on = "Mikrofonzugriff in den Einstellungen aktivieren…"
 
 [overlay.start]
-instant = "Instant-Modus: Link zum Teilen aufnehmen"
-instant_sign_in = "Instant-Modus: Zum Aufnehmen anmelden"
-sign_in = "Zum Nutzen anmelden"
 start_recording = "Aufnahme starten"
-studio = "Studio-Modus: Lokal aufnehmen und bearbeiten"
-take_screenshot = "Bildschirmfoto aufnehmen"
 
 [overlay.window]
 size_title = "Fenstergröße ändern"
@@ -3320,6 +3304,7 @@ delete = "Aktuelle Vorlage löschen"
 copy_name = "{name} · Kopie {number}"
 
 [dialog.teleprompter.assist]
+restart = "Von vorn lesen"
 write = "Mit KI schreiben"
 privacy = "Nur das unten eingegebene Thema wird an dein gewähltes Modell gesendet. Dein aktuelles Skript bleibt auf diesem Gerät. Bearbeite den Entwurf vor der Verwendung."
 topic = "Thema, Zielgruppe und Dauer, z. B. ein einminütiges Aufnahme-Tutorial"
@@ -3590,6 +3575,7 @@ remove = "Entfernen"
 retired_name = "Altes Parakeet-Modell"
 retired_note = "Wird nicht mehr genutzt, kann gelöscht werden · {size} belegt"
 save = "Sichern"
+save_settings_failed = "Dienstadresse und Modell konnten nicht gespeichert werden. Versuche es erneut."
 saving = "Prüfen und sichern…"
 sign_in_again = "Neu anmelden"
 sign_in_with = "Mit {name} anmelden"

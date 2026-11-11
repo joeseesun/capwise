@@ -969,8 +969,10 @@ on = "Oui"
 
 [main.error]
 camera_only_needs_camera = "L'enregistrement caméra seule nécessite une caméra sélectionnée."
+camera_unavailable = "La caméra sélectionnée est indisponible. Reconnectez-la ou choisissez une autre caméra."
 copy = "Copier l'erreur"
 devices_not_ready = "Les appareils d'enregistrement ne sont pas prêts. Ouvrez l'enregistreur et réessayez."
+microphone_unavailable = "Le microphone sélectionné « {name} » est indisponible. Reconnectez-le ou choisissez un autre microphone."
 title = "Un problème est survenu"
 
 [main.header]
@@ -1056,17 +1058,6 @@ title = "Enregistrement incomplet"
 nothing_saved = "Aucune vidéo n'a été enregistrée avant l'arrêt de cet enregistrement, il n'y a donc rien à récupérer. Ses fichiers se trouvent toujours dans {path}."
 rebuild_failed = "Capwise n'a pas pu reconstruire cet enregistrement ({error}). Rien n'a été supprimé et les fichiers d'origine se trouvent dans {path}."
 storage = "L'espace libre est insuffisant pour récupérer cet enregistrement ({error}). Libérez de l'espace puis cliquez à nouveau sur Récupérer. Rien n'a été supprimé et les fichiers se trouvent dans {path}."
-
-[main.sign_in]
-message = "Le mode Instant met en ligne pendant l'enregistrement : votre lien de partage est prêt dès l'arrêt."
-not_now = "Pas maintenant"
-open_browser_again = "Rouvrir le navigateur"
-pending_message = "Terminez la connexion à Capwise dans votre navigateur. Capwise reviendra ici et ouvrira l'enregistreur une fois que ce sera fait."
-sign_in = "Se connecter"
-timed_out = "Le délai de connexion a expiré. Réessayez."
-title = "Connectez-vous pour utiliser le mode Instant"
-use_studio = "Utiliser Studio"
-waiting = "En attente de votre navigateur"
 
 [main.storage]
 blocked = "Seulement {available} Go disponibles sur le disque d'enregistrement. Libérez de l'espace pour avoir au moins 512 Mo disponibles avant d'enregistrer."
@@ -1403,8 +1394,6 @@ starting = "Démarrage de la conversion..."
 display_fallback = "Écran {id}"
 countdown_title = "Compte à rebours de l'enregistrement"
 countdown_body = "Laisser quelques secondes entre le clic sur Lancer l'enregistrement et le début de la capture."
-mode_title = "Changer de mode d'enregistrement"
-mode_body = "Instant vous donne un lien à partager dès que vous arrêtez. Studio enregistre en pleine qualité pour le montage."
 
 [overlay.area]
 split_ratio = "5:4 · Partagé"
@@ -1441,12 +1430,7 @@ microphone_allow = "Autoriser l'accès au micro…"
 microphone_turn_on = "Activer l'accès au micro dans Réglages Système…"
 
 [overlay.start]
-instant = "Mode Instant : enregistrer un lien de partage"
-instant_sign_in = "Mode Instant : connectez-vous pour enregistrer"
-sign_in = "Se connecter pour utiliser"
 start_recording = "Lancer l'enregistrement"
-studio = "Mode Studio : enregistrer et modifier en local"
-take_screenshot = "Prendre une capture d'écran"
 
 [overlay.window]
 size_title = "Modifier la taille de la fenêtre"
@@ -3320,6 +3304,7 @@ delete = "Supprimer le préréglage actuel"
 copy_name = "{name} · Copie {number}"
 
 [dialog.teleprompter.assist]
+restart = "Relire depuis le début"
 write = "Écrire avec l'IA"
 privacy = "Seul le sujet ci-dessous est envoyé au modèle sélectionné. Votre script actuel reste sur cet appareil. Modifiez le brouillon avant de l'utiliser."
 topic = "Sujet, public et durée, par exemple un tutoriel d'enregistrement d'une minute"
@@ -3590,6 +3575,7 @@ remove = "Retirer"
 retired_name = "Ancien modèle Parakeet"
 retired_note = "N'est plus utilisé, vous pouvez le supprimer · {size} sur le disque"
 save = "Enregistrer"
+save_settings_failed = "Impossible d’enregistrer l’adresse du service et le modèle. Réessayez."
 saving = "Vérification et enregistrement…"
 sign_in_again = "Se reconnecter"
 sign_in_with = "Se connecter avec {name}"

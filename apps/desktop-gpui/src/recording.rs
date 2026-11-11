@@ -2525,12 +2525,20 @@ async fn start_attempt_with_upload(
     if config.camera.is_some()
         && let Some(ready) = &config.input_readiness.camera
     {
-        ready.clone().await.map_err(anyhow::Error::msg)?;
+        ready
+            .clone()
+            .await
+            .map_err(anyhow::Error::msg)
+            .context("Selected camera is unavailable")?;
     }
-    if config.microphone.is_some()
+    if let Some(label) = &config.microphone
         && let Some(ready) = &config.input_readiness.microphone
     {
-        ready.clone().await.map_err(anyhow::Error::msg)?;
+        ready
+            .clone()
+            .await
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
     }
 
     let (mic_feed, mic_lock, mic_errors) = match (&config.mic_feed, &config.microphone) {

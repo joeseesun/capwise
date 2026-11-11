@@ -209,7 +209,11 @@ fn set_key_uncached(kind: Kind, id: &str, key: &str) -> Result<(), String> {
             &account(kind, id),
             key.as_bytes(),
         )
-        .map_err(|error| format!("{}: {error}", tr::asr::keychain_failed()))
+        .map_err(|error| {
+            let status = error.code();
+            tracing::warn!(status, "Could not write an AI credential to the keychain");
+            format!("{} ({status}): {error}", tr::asr::keychain_failed())
+        })
     }
     #[cfg(all(not(target_os = "macos"), not(test)))]
     {

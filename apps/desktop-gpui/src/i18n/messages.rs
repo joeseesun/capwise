@@ -248,6 +248,18 @@ fn localize_at(message: &str, depth: u8) -> String {
         return tr::message::permission::unavailable(permission.display_name());
     }
     if depth < MAX_DEPTH {
+        let device_context = message
+            .strip_prefix("Selected camera is unavailable: ")
+            .map(|cause| (tr::main::error::camera_unavailable().to_string(), cause))
+            .or_else(|| {
+                let (name, cause) = message
+                    .strip_prefix("Selected microphone '")?
+                    .split_once("' is unavailable: ")?;
+                Some((tr::main::error::microphone_unavailable(name), cause))
+            });
+        if let Some((context, cause)) = device_context {
+            return format!("{context}\n{}", localize_at(cause, depth + 1));
+        }
         for wrapped in WRAPPED {
             let Some(inner) = message
                 .strip_prefix(wrapped.prefix)

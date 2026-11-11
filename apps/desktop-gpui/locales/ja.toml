@@ -969,8 +969,10 @@ on = "オン"
 
 [main.error]
 camera_only_needs_camera = "カメラのみの録画にはカメラを選択する必要があります。"
+camera_unavailable = "選択したカメラを使用できません。接続し直すか、別のカメラを選択してください。"
 copy = "エラーをコピー"
 devices_not_ready = "録画デバイスの準備ができていません。レコーダーを開いてもう一度お試しください。"
+microphone_unavailable = "選択したマイク「{name}」を使用できません。接続し直すか、別のマイクを選択してください。"
 title = "問題が発生しました"
 
 [main.header]
@@ -1056,17 +1058,6 @@ title = "未完了の録画"
 nothing_saved = "この録画が停止する前に保存されたビデオがないため、復元できるものはありません。ファイルは引き続き {path} にあります。"
 rebuild_failed = "Capwise はこの録画を再構築できませんでした ({error})。何も削除されていません。元のファイルは {path} にあります。"
 storage = "この録画を復元するための空き容量が不足しています ({error})。空き容量を確保してから、もう一度「復元」を押してください。何も削除されていません。ファイルは {path} にあります。"
-
-[main.sign_in]
-message = "Instantモードは録画しながらアップロードするので、停止した瞬間に共有リンクが用意されます。"
-not_now = "今はしない"
-open_browser_again = "ブラウザをもう一度開く"
-pending_message = "ブラウザでCapwiseへのサインインを完了してください。完了するとCapwiseがここに戻り、レコーダーを開きます。"
-sign_in = "サインイン"
-timed_out = "サインインがタイムアウトしました。もう一度お試しください。"
-title = "Instantモードを使うにはサインインしてください"
-use_studio = "Studioを使う"
-waiting = "ブラウザを待っています"
 
 [main.storage]
 blocked = "録画用ドライブの空き容量は{available} GBしかありません。録画する前に、512 MB以上の空きを確保してください。"
@@ -1403,8 +1394,6 @@ starting = "変換を開始しています..."
 display_fallback = "ディスプレイ{id}"
 countdown_title = "録画のカウントダウン"
 countdown_body = "「録画を開始」を押してから、数秒待って録画を始めます。"
-mode_title = "録画モードを変更"
-mode_body = "Instantは録画を止めた瞬間に共有リンクを作成します。Studioは編集用にフル画質で録画します。"
 
 [overlay.area]
 split_ratio = "5:4 · 分割向け"
@@ -1441,12 +1430,7 @@ microphone_allow = "マイクへのアクセスを許可…"
 microphone_turn_on = "設定でマイクへのアクセスをオンにする…"
 
 [overlay.start]
-instant = "Instantモード：共有リンクを録画"
-instant_sign_in = "Instantモード：サインインしてすぐに録画"
-sign_in = "サインインして使用"
 start_recording = "録画を開始"
-studio = "Studioモード：ローカルで録画して編集"
-take_screenshot = "スクリーンショットを撮る"
 
 [overlay.window]
 size_title = "ウィンドウサイズを変更"
@@ -3320,6 +3304,7 @@ delete = "現在のプリセットを削除"
 copy_name = "{name} · コピー {number}"
 
 [dialog.teleprompter.assist]
+restart = "最初から読み直す"
 write = "AIで原稿を作成"
 privacy = "選択したモデルには下のテーマだけを送信します。現在の原稿はこのデバイスに残ります。生成した下書きは、使用する前に編集してください。"
 topic = "テーマ、対象者、長さ（例：1分間の録画チュートリアル）"
@@ -3590,6 +3575,7 @@ remove = "削除"
 retired_name = "旧 Parakeet モデル"
 retired_note = "現在は使われていません。削除できます · {size} 使用"
 save = "保存"
+save_settings_failed = "サービスのアドレスとモデルを保存できませんでした。もう一度お試しください。"
 saving = "確認して保存中…"
 sign_in_again = "再ログイン"
 sign_in_with = "{name} でログイン"

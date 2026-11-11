@@ -327,11 +327,6 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (tr::upload::status::sign_in(), "Sign in to retry upload"),
         (tr::upload::status::uploaded(), "Uploaded"),
         (tr::upload::status::uploading(), "Uploading"),
-        (tr::overlay::mode_title(), "Change recording mode"),
-        (
-            tr::overlay::mode_body(),
-            "Instant gives you a link to share the moment you stop. Studio records in full quality for editing.",
-        ),
         (tr::overlay::countdown_title(), "Recording countdown"),
         (
             tr::overlay::countdown_body(),
@@ -450,21 +445,7 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             tr::overlay::device::microphone_turn_on(),
             "Turn on microphone access in Settings…",
         ),
-        (
-            tr::overlay::start::instant(),
-            "Instant Mode — Record shareable link",
-        ),
-        (
-            tr::overlay::start::instant_sign_in(),
-            "Instant Mode — Sign in to record instantly",
-        ),
-        (tr::overlay::start::sign_in(), "Sign In To Use"),
         (tr::overlay::start::start_recording(), "Start Recording"),
-        (
-            tr::overlay::start::studio(),
-            "Studio Mode — Record and edit locally",
-        ),
-        (tr::overlay::start::take_screenshot(), "Take Screenshot"),
         (
             tr::dialog::mode_select::instant(),
             "Share instantly with a link. Uploads as you record.",

@@ -82,6 +82,12 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - Never add `Co-authored-by` or other attribution trailers (Cursor, Cursor Agent, or anyone else). Commit as the user only.
 - PRs: clear description, linked issues, screenshots/GIFs for UI, env/migration notes. Keep scope tight and update docs when behavior changes.
 
+## Git task branches
+
+- Before starting or resuming a task, fetch `origin`, inspect `git status --short --branch` and `git worktree list --porcelain`, and compare `main`, `origin/main`, and `HEAD`. Start each new task in a short-lived worktree from the latest verified main. Preserve local main commits and active worktrees.
+- Refresh the base before substantial changes, final review, merging, or replacing the daily app. Review actual diffs for overlapping and patch-equivalent work. Re-run scoped checks on the integrated revision. Build the daily app from a clean commit with a recorded SHA.
+- Once main contains the verified task changes, remove its idle worktree and delete the local task branch in the same session. Confirm the worktree is clean, archive intentionally retained work, and preserve long-lived branches. Verify the final refs and report any worktree or branch that still needs attention.
+
 ## Agent‑Specific Practices
 - Do not start extra servers; use `bun run dev:web` or `bun run dev:desktop` as needed.
 - Prefer existing scripts and Turbo filters over ad‑hoc commands; clear `.turbo` only when necessary.

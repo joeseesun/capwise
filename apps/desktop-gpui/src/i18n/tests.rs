@@ -37,6 +37,10 @@ const CAPWISE_KEYS: &[&str] = &[
     "settings.nav.about",
     "settings.review.",
     "settings.stock.",
+    "settings.speech.preview_failed",
+    "settings.speech.stop_preview",
+    "settings.speech.voice_label",
+    "settings.teleprompter.",
     "settings.workflow.",
     "transcription.qwen",
 ];
