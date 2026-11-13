@@ -1351,6 +1351,12 @@ enum DragKind {
     ClipTrimEnd {
         end: f64,
     },
+    /// One keyframe of a picture layer slid along its clip. `time` is where
+    /// it sat on the timeline when pressed.
+    Keyframe {
+        key: usize,
+        time: f64,
+    },
     /// The length of the transition into clip `index`: a press on the clip's
     /// body dragged onto the clip before it, or on one of the transition's
     /// edges. `grow` is +1 when moving right lengthens it and -1 when moving
@@ -2600,7 +2606,7 @@ impl EditorWindow {
     /// Re-derive the drawn model from the live config. Runs after every edit;
     /// the waveforms arrive separately and later, so whatever has landed is
     /// carried across.
-    fn rebuild_timeline(&mut self) {
+    pub(crate) fn rebuild_timeline(&mut self) {
         self.dismiss_transient_menus();
         if let Some(timeline) = self.project.timeline.as_ref() {
             self.tracks.overlay = self.tracks.overlay.min(timeline.overlay_layer_count());
@@ -5440,7 +5446,19 @@ impl EditorWindow {
         } else {
             None
         };
+        let keyframe_press = (kind == TrackKind::Image
+            && matches!(hit, Hit::Body { .. })
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.contains(kind, index)))
+        .then(|| self.image_keyframe_hit(index, x, secs_per_pixel))
+        .flatten();
+        let press_time = keyframe_press.map_or(press_time, |(_, time)| time);
         let kind_of_drag = match (kind, hit) {
+            _ if keyframe_press.is_some() => {
+                keyframe_press.map(|(key, time)| DragKind::Keyframe { key, time })
+            }
             // The clip's handles: recording-domain, no promotion threshold, no
             // selection on release.
             (TrackKind::Clip, Hit::Handle { start: true, .. }) => {
@@ -6137,6 +6155,28 @@ impl EditorWindow {
                     drag.lane_target = resolved;
                     cx.notify();
                 }
+            }
+            DragKind::Keyframe { key, time } => {
+                let (target, engaged) =
+                    self.snap_dragged_time(time + delta, secs_per_pixel, snap_disabled);
+                self.drag_snap_time = engaged;
+                let index = drag.index;
+                self.edit_live(
+                    |timeline| {
+                        timeline
+                            .image_segments
+                            .get_mut(index)
+                            .and_then(|segment| {
+                                segment.retime_keyframe(
+                                    key,
+                                    target,
+                                    crate::editor_keyframes::KEYFRAME_MIN_GAP,
+                                )
+                            })
+                            .is_some()
+                    },
+                    cx,
+                );
             }
             DragKind::TrimStart { start, bounds } => {
                 let (snapped, engaged) =
@@ -7382,6 +7422,7 @@ impl EditorWindow {
                 (_, DragKind::CreateZoom { .. }) => "create",
                 (true, DragKind::TransitionDuration { .. }) => "clip-transition",
                 (true, DragKind::Move { .. }) => "move",
+                (true, DragKind::Keyframe { .. }) => "keyframe-retime",
                 (true, DragKind::ClipReorder) => "clip-reorder",
                 (true, _) => "trim",
                 (false, _) => "select",
@@ -14118,6 +14159,7 @@ impl Render for EditorWindow {
                 | DragKind::TrimEnd { .. }
                 | DragKind::ClipTrimStart { .. }
                 | DragKind::ClipTrimEnd { .. }
+                | DragKind::Keyframe { .. }
                 | DragKind::TransitionDuration { .. } => gpui::CursorStyle::ResizeLeftRight,
                 DragKind::CreateZoom { .. } => gpui::CursorStyle::Arrow,
             })

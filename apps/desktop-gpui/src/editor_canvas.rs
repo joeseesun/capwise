@@ -715,7 +715,7 @@ impl EditorWindow {
             for (index, segment) in timeline.image_segments.iter().enumerate() {
                 if exclude == CanvasSelection::Image(index)
                     || !segment.is_active_at(t)
-                    || segment.opacity <= 0.
+                    || segment.pose_at(t).opacity <= 0.
                 {
                     continue;
                 }
@@ -726,7 +726,7 @@ impl EditorWindow {
                             f64::from(layout.output_size[0]),
                             f64::from(layout.output_size[1]),
                         ),
-                        f64::from(segment.rotation),
+                        f64::from(segment.pose_at(t).rotation),
                     ));
                 }
             }
@@ -1033,6 +1033,7 @@ impl EditorWindow {
                 | CanvasSelection::Image(_)
                 | CanvasSelection::Shape(_) => {
                     let (rect, guides) = if let CanvasSelection::Image(index) = element {
+                        let time = self.preview_or_playhead();
                         let Some(segment) = self
                             .project
                             .timeline
@@ -1047,7 +1048,7 @@ impl EditorWindow {
                                 size,
                                 delta,
                                 (dir_x, dir_y),
-                                f64::from(segment.rotation),
+                                f64::from(segment.pose_at(time).rotation),
                                 segment.lock_aspect,
                             ),
                             Vec::new(),
@@ -1073,11 +1074,8 @@ impl EditorWindow {
             | CanvasSelection::Shape(_) => {
                 let bounds = if let CanvasSelection::Image(index) = element {
                     let rotation = self
-                        .project
-                        .timeline
-                        .as_ref()
-                        .and_then(|timeline| timeline.image_segments.get(index))
-                        .map_or(0., |segment| f64::from(segment.rotation));
+                        .image_pose(index)
+                        .map_or(0., |pose| f64::from(pose.rotation));
                     image_axis_bounds(start, size, rotation)
                 } else {
                     start
@@ -1131,6 +1129,9 @@ impl EditorWindow {
         self.snap_guides.clear();
         self.canvas_overlay_rect = None;
         if drag.moved {
+            if matches!(drag.element, CanvasSelection::Image(_)) {
+                self.rebuild_timeline();
+            }
             self.schedule_save(window, cx);
             match drag.element {
                 CanvasSelection::Display => tracing::info!(
@@ -1196,7 +1197,8 @@ impl EditorWindow {
                 .as_ref()
                 .and_then(|timeline| timeline.image_segments.get(index))
                 .is_some_and(|segment| {
-                    segment.is_active_at(self.preview_or_playhead()) && segment.opacity > 0.
+                    let time = self.preview_or_playhead();
+                    segment.is_active_at(time) && segment.pose_at(time).opacity > 0.
                 })
         {
             return false;
@@ -1247,6 +1249,9 @@ impl EditorWindow {
                 self.write_overlay_rect(selected, optimistic, cx);
             }
             CanvasSelection::Captions => self.write_caption_center(center, cx),
+        }
+        if matches!(selected, CanvasSelection::Image(_)) {
+            self.rebuild_timeline();
         }
         self.schedule_save(window, cx);
         true
@@ -1351,12 +1356,12 @@ impl EditorWindow {
                 {
                     return Some(rect);
                 }
-                let segment = self.project.timeline.as_ref()?.image_segments.get(index)?;
+                let pose = self.image_pose(index)?;
                 Some(NormRect {
-                    x: segment.center.x - segment.size.x / 2.,
-                    y: segment.center.y - segment.size.y / 2.,
-                    w: segment.size.x,
-                    h: segment.size.y,
+                    x: pose.center.x - pose.size.x / 2.,
+                    y: pose.center.y - pose.size.y / 2.,
+                    w: pose.size.x,
+                    h: pose.size.y,
                 })
             }
             CanvasSelection::Mask(index) => {
@@ -1418,6 +1423,7 @@ impl EditorWindow {
             x: rect.w.max(0.01),
             y: rect.h.max(0.01),
         };
+        let time = self.preview_or_playhead();
         let Some(timeline) = self.project.timeline.as_mut() else {
             return;
         };
@@ -1426,8 +1432,10 @@ impl EditorWindow {
                 let Some(segment) = timeline.image_segments.get_mut(index) else {
                     return;
                 };
-                segment.center = center;
-                segment.size = size;
+                let mut pose = segment.pose_at(time);
+                pose.center = center;
+                pose.size = size;
+                segment.write_pose_at(time, pose, crate::editor_keyframes::KEYFRAME_TOLERANCE);
             }
             CanvasSelection::Mask(index) => {
                 let Some(segment) = timeline.mask_segments.get_mut(index) else {
@@ -1618,7 +1626,7 @@ impl EditorWindow {
                                     active_card.is_none()
                                         && segment.track == track.track
                                         && segment.is_active_at(time)
-                                        && segment.opacity > 0.
+                                        && segment.pose_at(time).opacity > 0.
                                 })
                         {
                             if let Some(rect) = self.element_rect(CanvasSelection::Image(index)) {
@@ -2930,11 +2938,8 @@ impl EditorWindow {
     ) -> AnyElement {
         let element = CanvasSelection::Image(index);
         let rotation = self
-            .project
-            .timeline
-            .as_ref()
-            .and_then(|timeline| timeline.image_segments.get(index))
-            .map_or(0., |segment| f64::from(segment.rotation));
+            .image_pose(index)
+            .map_or(0., |pose| f64::from(pose.rotation));
         let size = (f64::from(canvas.0), f64::from(canvas.1));
         let corners = image_corners(rect, size, rotation);
         let show = self.canvas_selection == Some(element) || self.hovered_canvas == Some(element);

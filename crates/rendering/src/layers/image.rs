@@ -278,26 +278,28 @@ fn visible_images(
         .iter()
         .enumerate()
         .filter_map(|(index, segment)| {
-            if !segment.is_active_at(time)
-                || segment.path.is_empty()
-                || !segment.opacity.is_finite()
-                || segment.opacity <= 0.0
-                || !segment.rotation.is_finite()
+            if !segment.is_active_at(time) || segment.path.is_empty() {
+                return None;
+            }
+            let pose = segment.pose_at(time);
+            if !pose.opacity.is_finite()
+                || pose.opacity <= 0.0
+                || !pose.rotation.is_finite()
                 || !segment.rounding.is_finite()
             {
                 return None;
             }
             let resting = [
-                (segment.size.x * f64::from(output_size.0)) as f32,
-                (segment.size.y * f64::from(output_size.1)) as f32,
+                (pose.size.x * f64::from(output_size.0)) as f32,
+                (pose.size.y * f64::from(output_size.1)) as f32,
             ];
             let motion = image_motion(segment, time, resting);
             if motion.alpha <= 0.0 {
                 return None;
             }
             let center_size = [
-                (segment.center.x * f64::from(output_size.0)) as f32 + motion.offset[0],
-                (segment.center.y * f64::from(output_size.1)) as f32 + motion.offset[1],
+                (pose.center.x * f64::from(output_size.0)) as f32 + motion.offset[0],
+                (pose.center.y * f64::from(output_size.1)) as f32 + motion.offset[1],
                 resting[0] * motion.scale,
                 resting[1] * motion.scale,
             ];
@@ -309,7 +311,7 @@ fn visible_images(
             {
                 return None;
             }
-            let (sin, cos) = ((segment.rotation + motion.rotation) % 360.0)
+            let (sin, cos) = ((pose.rotation + motion.rotation) % 360.0)
                 .to_radians()
                 .sin_cos();
             let half_width = (cos.abs() * center_size[2] + sin.abs() * center_size[3]) * 0.5;
@@ -329,7 +331,7 @@ fn visible_images(
                     rotation_opacity_radius: [
                         cos,
                         sin,
-                        (segment.opacity * motion.alpha).clamp(0.0, 1.0),
+                        (pose.opacity * motion.alpha).clamp(0.0, 1.0),
                         segment.rounding.clamp(0.0, 100.0)
                             * 0.005
                             * center_size[2].min(center_size[3]),
@@ -947,6 +949,31 @@ mod tests {
             .collect();
         assert!(pushes.iter().all(|x| *x >= -1e-3));
         assert!(pushes.iter().any(|x| *x > 5.0));
+    }
+
+    #[test]
+    fn keyframed_pictures_draw_at_the_pose_for_the_frame() {
+        let mut layer = segment("moving.png");
+        layer.start = 1.0;
+        layer.end = 3.0;
+        layer.center = XY::new(0.25, 0.5);
+        layer.size = XY::new(0.25, 0.25);
+        assert!(layer.add_keyframe_at(1.0, 0.01));
+        let mut pose = layer.pose_at(3.0);
+        pose.center.x = 0.75;
+        pose.opacity = 0.5;
+        pose.rotation = 90.0;
+        layer.write_pose_at(3.0, pose, 0.01);
+        let layers = [layer];
+        let at = |frame: u32| visible_images(&layers, frame, 30, (400, 400))[0].1;
+        assert_eq!(at(30).center_size, [100.0, 200.0, 100.0, 100.0]);
+        assert_eq!(at(30).rotation_opacity_radius[2], 1.0);
+        let middle = at(60);
+        assert!((middle.center_size[0] - 200.0).abs() < 0.01);
+        assert!((middle.rotation_opacity_radius[2] - 0.75).abs() < 1e-4);
+        let late = at(89);
+        assert!(late.center_size[0] > 295.0 && late.center_size[0] <= 300.0);
+        assert!(late.rotation_opacity_radius[1] > 0.99);
     }
 
     #[test]

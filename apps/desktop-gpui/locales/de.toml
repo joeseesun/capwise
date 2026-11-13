@@ -1883,6 +1883,20 @@ rounding = "Rundung"
 
 [editor.panel.keyboard]
 
+[editor.panel.keyframes]
+add = "Keyframe hinzufügen"
+clear = "Keyframes löschen"
+hint_active = "Änderungen an der Abspielposition werden als Keyframes gespeichert."
+hint_empty = "Füge einen Keyframe hinzu, bewege die Abspielposition und verschiebe oder ändere das Bild. Dazwischen wird animiert."
+hold = "Halten"
+linear = "Linear"
+next = "Nächster Keyframe"
+previous = "Vorheriger Keyframe"
+remove = "Keyframe entfernen"
+smooth = "Weich"
+title = "Keyframes"
+transition = "Bewegung"
+
 [editor.panel.mask]
 blur = "Unschärfe"
 highlight = "Hervorheben"

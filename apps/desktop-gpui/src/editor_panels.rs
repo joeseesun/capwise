@@ -3609,10 +3609,11 @@ impl EditorWindow {
             return 0.;
         };
         match slider {
-            PanelSlider::Image(property) => timeline
-                .image_segments
-                .get(index)
-                .map_or(0., |segment| property.read(segment)),
+            PanelSlider::Image(property) => {
+                timeline.image_segments.get(index).map_or(0., |segment| {
+                    property.read(segment, self.preview_or_playhead())
+                })
+            }
             PanelSlider::Shape(property) => timeline
                 .shape_segments
                 .get(index)
@@ -3758,8 +3759,9 @@ impl EditorWindow {
     ) {
         match slider {
             PanelSlider::Image(property) => {
+                let time = self.preview_or_playhead();
                 self.edit_image_segment("image-transform", index, window, cx, move |segment| {
-                    property.write(segment, value);
+                    property.write(segment, time, value);
                     true
                 })
             }
@@ -9598,24 +9600,29 @@ impl ImageProperty {
             _ => (0., 100., 1.),
         }
     }
-    fn read(self, segment: &cap_project::ImageSegment) -> f32 {
+    fn read(self, segment: &cap_project::ImageSegment, time: f64) -> f32 {
         match self {
-            Self::Opacity => segment.opacity * 100.,
-            Self::Rotation => segment.rotation,
+            Self::Opacity => segment.pose_at(time).opacity * 100.,
+            Self::Rotation => segment.pose_at(time).rotation,
             Self::Rounding => segment.rounding,
         }
     }
-    fn write(self, segment: &mut cap_project::ImageSegment, value: f32) {
+    fn write(self, segment: &mut cap_project::ImageSegment, time: f64, value: f32) {
         if !value.is_finite() {
             return;
         }
         let (min, max, _) = self.limits();
         let value = value.clamp(min, max);
+        let mut pose = segment.pose_at(time);
         match self {
-            Self::Opacity => segment.opacity = value / 100.,
-            Self::Rotation => segment.rotation = value,
-            Self::Rounding => segment.rounding = value,
+            Self::Opacity => pose.opacity = value / 100.,
+            Self::Rotation => pose.rotation = value,
+            Self::Rounding => {
+                segment.rounding = value;
+                return;
+            }
         }
+        segment.write_pose_at(time, pose, crate::editor_keyframes::KEYFRAME_TOLERANCE);
     }
 }
 
@@ -9675,8 +9682,15 @@ impl EditorWindow {
                 .icon_size(px(14.))
                 .label(tr::editor::panel::image::center())
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.edit_image_segment("image-center", index, window, cx, |segment| {
-                        segment.center = XY::new(0.5, 0.5);
+                    let time = this.preview_or_playhead();
+                    this.edit_image_segment("image-center", index, window, cx, move |segment| {
+                        let mut pose = segment.pose_at(time);
+                        pose.center = XY::new(0.5, 0.5);
+                        segment.write_pose_at(
+                            time,
+                            pose,
+                            crate::editor_keyframes::KEYFRAME_TOLERANCE,
+                        );
                         true
                     });
                 })),
@@ -9716,6 +9730,7 @@ impl EditorWindow {
             }))
             .child(image_slider(self, ImageProperty::Opacity, cx))
             .child(image_slider(self, ImageProperty::Rounding, cx))
+            .child(self.render_image_keyframes(index, cx))
             .child(self.render_image_motion(index, cx))
             .child(self.more_settings("image", cx, move |this, cx| {
                 let mut column = div().flex().flex_col().gap(px(14.)).child(image_slider(
