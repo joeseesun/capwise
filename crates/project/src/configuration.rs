@@ -1919,6 +1919,11 @@ pub struct ImageSegment {
     pub emphasis: ImageEmphasis,
     pub animation_out: ImageMotion,
     pub animation_out_duration: f64,
+    /// Whole-pose keyframes. While any exist they decide `center`, `size`,
+    /// `rotation` and `opacity`; those fields mirror the first keyframe so
+    /// builds without keyframes still place the picture sensibly.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keyframes: Vec<crate::LayerKeyframe>,
 }
 
 /// An entrance or exit for a picture layer. Exits play the same motion in
@@ -1978,6 +1983,7 @@ impl Default for ImageSegment {
             emphasis: ImageEmphasis::None,
             animation_out: ImageMotion::None,
             animation_out_duration: 0.3,
+            keyframes: Vec::new(),
         }
     }
 }

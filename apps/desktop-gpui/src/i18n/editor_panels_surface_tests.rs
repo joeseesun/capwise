@@ -998,6 +998,27 @@ fn editor_panels_match_the_literals_they_replaced() {
             tr::editor::panel::image::motion::apply_all(),
             "Apply to all pictures and stickers",
         ),
+        (tr::editor::panel::keyframes::title(), "Keyframes"),
+        (tr::editor::panel::keyframes::add(), "Add keyframe"),
+        (tr::editor::panel::keyframes::remove(), "Remove keyframe"),
+        (
+            tr::editor::panel::keyframes::previous(),
+            "Previous keyframe",
+        ),
+        (tr::editor::panel::keyframes::next(), "Next keyframe"),
+        (tr::editor::panel::keyframes::clear(), "Clear keyframes"),
+        (
+            tr::editor::panel::keyframes::hint_empty(),
+            "Add a keyframe, move the playhead, then move or restyle the picture. It animates between the two.",
+        ),
+        (
+            tr::editor::panel::keyframes::select_layer(),
+            "Select a picture or sticker to add a keyframe",
+        ),
+        (tr::editor::panel::keyframes::transition(), "Motion"),
+        (tr::editor::panel::keyframes::smooth(), "Smooth"),
+        (tr::editor::panel::keyframes::linear(), "Linear"),
+        (tr::editor::panel::keyframes::hold(), "Hold"),
         (tr::editor::panel::text_segment::basic(), "Basic"),
         (tr::editor::panel::text_segment::alignment(), "Alignment"),
         (

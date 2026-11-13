@@ -1883,6 +1883,20 @@ rounding = "Rundung"
 
 [editor.panel.keyboard]
 
+[editor.panel.keyframes]
+add = "Keyframe hinzufügen"
+clear = "Keyframes löschen"
+hint_empty = "Füge einen Keyframe hinzu, bewege die Abspielposition und verschiebe oder ändere das Bild. Dazwischen wird animiert."
+hold = "Halten"
+linear = "Linear"
+next = "Nächster Keyframe"
+previous = "Vorheriger Keyframe"
+remove = "Keyframe entfernen"
+select_layer = "Wähle ein Bild oder einen Sticker, um einen Keyframe hinzuzufügen"
+smooth = "Weich"
+title = "Keyframes"
+transition = "Bewegung"
+
 [editor.panel.mask]
 blur = "Unschärfe"
 highlight = "Hervorheben"
@@ -3858,7 +3872,7 @@ apple_privacy = "Folgt Ihrer Stimme mit der lokalen Apple-Spracherkennung. Kein 
 apple_connecting = "Apple-Spracherkennung wird gestartet…"
 apple_permission = "Erlauben Sie Capwise die Spracherkennung in den Systemeinstellungen."
 apple_unavailable = "Die lokale Spracherkennung ist für diese Sprache oder diesen Mac nicht verfügbar."
-apple_interrupted = "Die Spracherkennung wurde unterbrochen. Wählen Sie die Mikrofontaste, um es erneut zu versuchen."
+apple_interrupted = "Die Spracherkennung wurde unterbrochen. Drücken Sie auf Wiedergabe, um es erneut zu versuchen."
 apple_manual = "Sprachverfolgung pausiert. Drücken Sie die Leertaste zum Fortsetzen."
 waiting = "Bereit zum Vorlesen"
 pause_action = "Pausieren"
@@ -3866,7 +3880,7 @@ start_action = "Sprachverfolgung starten"
 scroll_action = "Scrollen starten"
 previous_sentence = "Vorheriger Satz"
 next_sentence = "Nächster Satz"
-scroll_mode = "Scrollmodus"
+use_steady = "Zu gleichmäßigem Scrollen wechseln"
 
 [editor.workbench]
 captions_hidden = "Untertitel sind in der Vorschau und im Export ausgeblendet."

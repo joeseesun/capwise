@@ -1883,6 +1883,20 @@ rounding = "Redondeo"
 
 [editor.panel.keyboard]
 
+[editor.panel.keyframes]
+add = "Añadir fotograma clave"
+clear = "Borrar fotogramas clave"
+hint_empty = "Añade un fotograma clave, mueve el cabezal y luego mueve o ajusta la imagen. Se anima entre ambos."
+hold = "Mantener"
+linear = "Lineal"
+next = "Fotograma clave siguiente"
+previous = "Fotograma clave anterior"
+remove = "Quitar fotograma clave"
+select_layer = "Selecciona una imagen o un sticker para añadir un fotograma clave"
+smooth = "Suave"
+title = "Fotogramas clave"
+transition = "Movimiento"
+
 [editor.panel.mask]
 blur = "Desenfoque"
 highlight = "Resaltar"
@@ -3858,7 +3872,7 @@ apple_privacy = "Sigue tu voz con el reconocimiento de Apple en el dispositivo. 
 apple_connecting = "Iniciando el reconocimiento de voz de Apple…"
 apple_permission = "Permite que Capwise use el reconocimiento de voz en Ajustes del Sistema."
 apple_unavailable = "El reconocimiento de voz local no está disponible para este idioma o Mac."
-apple_interrupted = "Se interrumpió el reconocimiento de voz. Selecciona el botón del micrófono para reintentar."
+apple_interrupted = "Se interrumpió el reconocimiento de voz. Pulsa Reproducir para volver a intentarlo."
 apple_manual = "Seguimiento por voz en pausa. Pulsa la barra espaciadora para continuar."
 waiting = "Listo para seguir tu voz"
 pause_action = "Pausar"
@@ -3866,7 +3880,7 @@ start_action = "Iniciar el seguimiento por voz"
 scroll_action = "Iniciar el desplazamiento"
 previous_sentence = "Frase anterior"
 next_sentence = "Frase siguiente"
-scroll_mode = "Modo de desplazamiento"
+use_steady = "Cambiar a desplazamiento constante"
 
 [editor.workbench]
 captions_hidden = "Los subtítulos están ocultos en la vista previa y en la exportación."

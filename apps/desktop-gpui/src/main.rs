@@ -50,6 +50,7 @@ mod editor_crop;
 mod editor_edits;
 mod editor_export;
 mod editor_hover_bench;
+mod editor_keyframes;
 #[cfg(target_os = "linux")]
 mod editor_modal;
 mod editor_panels;

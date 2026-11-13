@@ -67,9 +67,25 @@ pub(super) fn privacy_copy() -> &'static str {
     return copy::privacy();
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn supports_local_follow(script: &str) -> bool {
+    macos::supports_local_follow(script)
+}
+
+pub(super) fn can_auto_start() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos::can_auto_start();
+    #[cfg(not(target_os = "macos"))]
+    return true;
+}
+
 impl FollowPhase {
     fn active(self) -> bool {
         matches!(self, Self::Connecting | Self::Waiting | Self::Listening)
+    }
+
+    fn needs_steady_fallback(self) -> bool {
+        matches!(self, Self::Failed(_) | Self::Paused(PauseReason::Muted))
     }
 
     fn label(self) -> &'static str {
@@ -392,6 +408,15 @@ impl TeleprompterWindow {
         self.follow.phase.active()
     }
 
+    pub(super) fn follow_needs_steady_fallback(&self) -> bool {
+        self.voice_mode && self.follow.phase.needs_steady_fallback()
+    }
+
+    #[cfg(test)]
+    pub(super) fn fail_follow_for_test(&mut self) {
+        self.follow.stop(FollowPhase::Failed(Failure::AudioLag));
+    }
+
     pub(super) fn reading_offset(&self, cx: &Context<Self>) -> Option<usize> {
         let body = self.follow.body_bounds.get()?;
         let text = self.follow.text_bounds.get()?;
@@ -589,9 +614,7 @@ impl TeleprompterWindow {
         }
     }
 
-    /// Voice follow's state over the reading bar, with the one fix a failure
-    /// needs (settings, or choosing a microphone). Nothing while off.
-    pub(super) fn render_follow_status(&self, _cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    pub(super) fn render_follow_status(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let phase = self.follow.phase;
         if phase == FollowPhase::Off {
             return None;
@@ -624,6 +647,7 @@ impl TeleprompterWindow {
         Some(
             div()
                 .id("prompter-follow-status")
+                .debug_selector(|| "prompter-follow-status".into())
                 .occlude()
                 .flex()
                 .flex_row()
@@ -634,6 +658,18 @@ impl TeleprompterWindow {
                 .py(px(4.))
                 .rounded(px(12.))
                 .bg(Hsla::from(self.theme.gray_2))
+                .when(
+                    matches!(phase, FollowPhase::Waiting | FollowPhase::Listening),
+                    |status| {
+                        status.child(
+                            svg()
+                                .path("icons/microphone.svg")
+                                .size(px(13.))
+                                .flex_shrink_0()
+                                .text_color(Hsla::from(self.theme.gray_10)),
+                        )
+                    },
+                )
                 .child(
                     div()
                         .min_w_0()
@@ -646,6 +682,16 @@ impl TeleprompterWindow {
                         .child(phase.label()),
                 )
                 .children(fix)
+                .when(phase.needs_steady_fallback(), |status| {
+                    status.child(
+                        self.button("prompter-follow-use-steady", copy::use_steady())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.glide = None;
+                                this.wake_bar(window, cx);
+                                this.set_voice_mode(false, window, cx);
+                            })),
+                    )
+                })
                 .into_any_element(),
         )
     }
@@ -654,6 +700,15 @@ impl TeleprompterWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn steady_fallback_is_offered_for_failed_or_muted_follow() {
+        assert!(FollowPhase::Failed(Failure::Permission).needs_steady_fallback());
+        assert!(FollowPhase::Failed(Failure::Microphone).needs_steady_fallback());
+        assert!(FollowPhase::Paused(PauseReason::Muted).needs_steady_fallback());
+        assert!(!FollowPhase::Paused(PauseReason::Manual).needs_steady_fallback());
+        assert!(!FollowPhase::Listening.needs_steady_fallback());
+    }
 
     #[test]
     fn follow_only_uses_the_explicit_official_speech_endpoint() {

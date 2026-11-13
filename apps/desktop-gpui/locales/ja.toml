@@ -1883,6 +1883,20 @@ rounding = "角丸"
 
 [editor.panel.keyboard]
 
+[editor.panel.keyframes]
+add = "キーフレームを追加"
+clear = "キーフレームを消去"
+hint_empty = "キーフレームを追加して再生ヘッドを動かし、画像を移動または調整すると、その間が自動でアニメーションします。"
+hold = "停止"
+linear = "等速"
+next = "次のキーフレーム"
+previous = "前のキーフレーム"
+remove = "キーフレームを削除"
+select_layer = "画像またはステッカーを選択してキーフレームを追加"
+smooth = "スムーズ"
+title = "キーフレーム"
+transition = "動き"
+
 [editor.panel.mask]
 blur = "ぼかし"
 highlight = "強調"
@@ -3858,7 +3872,7 @@ apple_privacy = "Apple のオンデバイス音声認識で朗読に合わせて
 apple_connecting = "Apple の音声認識を開始中…"
 apple_permission = "システム設定で Capwise の音声認識を許可してください。"
 apple_unavailable = "この言語または Mac ではオンデバイス音声認識を利用できません。"
-apple_interrupted = "音声認識が中断されました。マイクボタンを選んで再試行してください。"
+apple_interrupted = "音声認識が中断されました。再生ボタンを押してやり直してください。"
 apple_manual = "音声追従を一時停止しました。スペースキーで再開します。"
 waiting = "読み上げ待機中"
 pause_action = "一時停止"
@@ -3866,7 +3880,7 @@ start_action = "音声追従を開始"
 scroll_action = "スクロールを開始"
 previous_sentence = "前の文"
 next_sentence = "次の文"
-scroll_mode = "スクロール方式"
+use_steady = "等速スクロールに切り替え"
 
 [editor.workbench]
 captions_hidden = "字幕はプレビューと書き出しで非表示になっています。"

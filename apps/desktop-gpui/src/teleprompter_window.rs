@@ -23,6 +23,8 @@
 //! tests translated at the bottom.
 
 mod follow;
+#[cfg(target_os = "macos")]
+pub(crate) use follow::supports_local_follow;
 
 use std::{
     cell::{Cell, RefCell},
@@ -311,6 +313,7 @@ pub struct TeleprompterWindow {
     play_menu_open: bool,
     /// Voice follow instead of steady scrolling, for this window's life.
     voice_mode: bool,
+    voice_mode_chosen: bool,
     /// A speed or size change, shown briefly over the script.
     toast: Option<SharedString>,
     toast_task: Option<gpui::Task<()>>,
@@ -384,7 +387,7 @@ impl TeleprompterWindow {
 
     fn with_theme(window: &mut Window, cx: &mut Context<Self>, theme: Theme) -> Self {
         let state = TeleprompterState::load();
-        let voice_mode = crate::settings_teleprompter::default_voice_follow();
+        let voice_mode = crate::settings_teleprompter::default_voice_follow(&state.script);
         let save = Rc::new(RefCell::new(PendingSave {
             state: state.clone(),
             keys: BTreeSet::new(),
@@ -468,7 +471,7 @@ impl TeleprompterWindow {
                 && crate::settings_teleprompter::auto_start()
             {
                 if this.voice_mode {
-                    if !this.follow_active() {
+                    if !this.follow_active() && follow::can_auto_start() {
                         this.start_follow(window, cx);
                     }
                 } else if !this.playback_state.requested {
@@ -560,6 +563,7 @@ impl TeleprompterWindow {
             over_bar: false,
             play_menu_open: false,
             voice_mode,
+            voice_mode_chosen: false,
             toast: None,
             toast_task: None,
             clicked_offset: None,
@@ -759,6 +763,10 @@ impl TeleprompterWindow {
         }
         if self.ai_open {
             self.cancel_ai(window, cx);
+        }
+        if !self.voice_mode_chosen {
+            self.voice_mode =
+                crate::settings_teleprompter::default_voice_follow(&self.state.script);
         }
         let caret = self.script_input.read(cx).selection().start;
         self.editing = false;
@@ -1127,6 +1135,7 @@ impl TeleprompterWindow {
 
     fn set_voice_mode(&mut self, voice: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.play_menu_open = false;
+        self.voice_mode_chosen = true;
         if self.voice_mode != voice {
             self.stop_follow();
             self.stop_playback();
@@ -1398,7 +1407,7 @@ impl TeleprompterWindow {
                     )
                 })
                 .children(self.render_toast())
-                .children(self.render_reading_bar(cx))
+                .children(self.render_reading_bar(window.viewport_size().width, cx))
                 .children(self.render_play_menu(cx))
             })
             .children(self.render_slider_drag_layer(cx))
@@ -1762,15 +1771,22 @@ impl TeleprompterWindow {
 
     fn reading_transport(&self, cx: &mut Context<Self>) -> ui::IconButton {
         use tr::dialog::teleprompter::follow as copy;
-        let running = self.running();
-        let (icon, label) = match (running, self.voice_mode) {
-            (true, _) => ("icons/pause.svg", copy::pause_action()),
-            (false, _) if self.at_end() => (
+        let (icon, label) = if self.running() {
+            ("icons/pause.svg", copy::pause_action())
+        } else if self.at_end() {
+            (
                 "icons/rotate-ccw.svg",
                 tr::dialog::teleprompter::assist::restart(),
-            ),
-            (false, true) => ("icons/microphone.svg", copy::start_action()),
-            (false, false) => ("icons/play.svg", copy::scroll_action()),
+            )
+        } else {
+            (
+                "icons/play.svg",
+                if self.voice_mode {
+                    copy::start_action()
+                } else {
+                    copy::scroll_action()
+                },
+            )
         };
         self.tool_button(
             "playback",
@@ -1786,7 +1802,11 @@ impl TeleprompterWindow {
     }
 
     /// Voice controls stay visible during capture so Pause is always reachable.
-    fn render_reading_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn render_reading_bar(
+        &self,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
         use tr::dialog::teleprompter::assist as copy;
         let running = self.running();
         if (self.compact_now() || (!self.voice_mode && running))
@@ -1794,10 +1814,13 @@ impl TeleprompterWindow {
             && !self.over_bar
             && !self.play_menu_open
             && !self.dragging
+            && !self.follow_needs_steady_fallback()
         {
             return None;
         }
         let theme = self.theme;
+        let show_speed_labels = width >= px(660.);
+        let narrow = width < px(540.);
         let left = remaining_seconds(
             count_words(&self.state.script),
             self.state.words_per_minute,
@@ -1828,7 +1851,7 @@ impl TeleprompterWindow {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(4.))
+            .gap(px(if narrow { 3. } else { 4. }))
             .h(px(40.))
             .px(px(5.))
             .rounded_full()
@@ -1837,39 +1860,24 @@ impl TeleprompterWindow {
             .bg(Hsla::from(theme.gray_2))
             .shadow_md()
             .child(self.reading_transport(cx))
-            .when(self.voice_mode, |bar| {
-                bar.child(
-                    self.button("prompter-mode", tr::dialog::teleprompter::follow::title())
-                        .right_icon("icons/chevron-up.svg")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.play_menu_open = !this.play_menu_open;
-                            cx.notify();
-                        })),
+            .child(
+                self.button(
+                    "prompter-mode",
+                    crate::settings_teleprompter::mode_label(self.voice_mode),
                 )
-            })
-            .when(!self.voice_mode, |bar| {
-                bar.child(
-                    self.tool_button(
-                        "prompter-mode",
-                        "icons/chevron-up.svg",
-                        self.play_menu_open,
-                        cx.listener(|this, _, _, cx| {
-                            this.play_menu_open = !this.play_menu_open;
-                            cx.notify();
-                        }),
-                    )
-                    .accessible_name(tr::dialog::teleprompter::follow::scroll_mode())
-                    .size(px(22.))
-                    .icon_size(px(12.)),
-                )
-            })
+                .right_icon("icons/chevron-up.svg")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.play_menu_open = !this.play_menu_open;
+                    cx.notify();
+                })),
+            )
             .child(divider())
             .when(!self.voice_mode, |bar| {
                 // The thumb's centre sits on the track's ends, so half of it
                 // overhangs; the padding keeps it off the labels.
-                bar.child(label(copy::slower()))
-                    .child(div().px(px(7.)).child(self.render_range(cx)))
-                    .child(label(copy::faster()))
+                bar.when(show_speed_labels, |bar| bar.child(label(copy::slower())))
+                    .child(div().px(px(7.)).child(self.render_range(narrow, cx)))
+                    .when(show_speed_labels, |bar| bar.child(label(copy::faster())))
             })
             .when(self.voice_mode, |bar| {
                 use tr::dialog::teleprompter::follow as copy;
@@ -1892,7 +1900,7 @@ impl TeleprompterWindow {
                     .accessible_name(copy::next_sentence()),
                 )
             })
-            .when(!self.voice_mode, |bar| {
+            .when(!self.voice_mode && !narrow, |bar| {
                 bar.child(
                     div()
                         .flex_shrink_0()
@@ -1946,13 +1954,23 @@ impl TeleprompterWindow {
                 }),
             )
             .child(divider())
-            .child(
+            .child(if narrow {
+                self.tool_button(
+                    "prompter-edit",
+                    "icons/pencil.svg",
+                    false,
+                    cx.listener(|this, _, window, cx| this.enter_editing(None, window, cx)),
+                )
+                .accessible_name(copy::edit())
+                .into_any_element()
+            } else {
                 self.button("prompter-edit", copy::edit())
                     .icon("icons/pencil.svg")
                     .on_click(
                         cx.listener(|this, _, window, cx| this.enter_editing(None, window, cx)),
-                    ),
-            );
+                    )
+                    .into_any_element()
+            });
         Some(
             div()
                 .absolute()
@@ -2035,7 +2053,7 @@ impl TeleprompterWindow {
                 .child(
                     item(
                         "prompter-mode-scroll",
-                        copy::mode_scroll(),
+                        crate::settings_teleprompter::mode_label(false),
                         copy::mode_scroll_note(),
                         !self.voice_mode,
                     )
@@ -2098,10 +2116,10 @@ impl TeleprompterWindow {
     }
 
     /// The speed range: a `h-1` track with a `size-3` thumb -- [`ui::Slider`].
-    fn render_range(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_range(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let fraction = (self.state.words_per_minute as f32 - WPM_MIN) / (WPM_MAX - WPM_MIN);
         ui::Slider::new("speed", fraction, self.speed_track.clone())
-            .row_width(px(56.))
+            .row_width(px(if narrow { 44. } else { 56. }))
             .track(px(4.), Theme::with_alpha(self.theme.gray_12, 0.10))
             .thumb(px(12.), Hsla::from(self.theme.gray_12), None)
             .on_drag_start(
@@ -2736,7 +2754,9 @@ mod tests {
     use super::*;
 
     #[gpui::test]
-    fn pause_click_survives_scrolling_after_the_controls_timeout(cx: &mut gpui::TestAppContext) {
+    fn reading_controls_pause_during_scroll_and_switch_after_follow_failure(
+        cx: &mut gpui::TestAppContext,
+    ) {
         use gpui::{Modifiers, VisualTestContext, size};
 
         struct StoreOverride;
@@ -2751,8 +2771,10 @@ mod tests {
         let script = "This is a line of the teleprompter script.\n".repeat(120);
         std::fs::write(
             &path,
-            serde_json::to_vec(&serde_json::json!({ "teleprompter": { "script": script } }))
-                .unwrap(),
+            serde_json::to_vec(&serde_json::json!({
+                "teleprompter": { "script": script, "defaultVoiceFollow": false }
+            }))
+            .unwrap(),
         )
         .unwrap();
         store::set_test_tauri_store_path(Some(path));
@@ -2766,7 +2788,7 @@ mod tests {
                 })
             }
         }
-        let window = cx.open_window(size(px(560.), px(320.)), |window, cx| {
+        let window = cx.open_window(size(px(TELEPROMPTER_MIN_WIDTH), px(320.)), |window, cx| {
             TestPrompter(cx.new(|cx| TeleprompterWindow::with_theme(window, cx, Theme::light())))
         });
         let prompter = window.read_with(cx, |view, _| view.0.clone()).unwrap();
@@ -2778,13 +2800,26 @@ mod tests {
             });
         };
         draw(&mut visual);
-        let bar = visual.debug_bounds("prompter-bar").unwrap();
-        let button = point(bar.left() + px(21.), bar.center().y);
         visual.simulate_mouse_move(point(px(100.), px(100.)), None, Modifiers::none());
         draw(&mut visual);
+        let bar = visual.debug_bounds("prompter-bar").unwrap();
+        assert!(
+            bar.left() >= px(0.) && bar.right() <= px(TELEPROMPTER_MIN_WIDTH),
+            "toolbar bounds at the minimum window width: {bar:?}"
+        );
+        let button = point(bar.left() + px(21.), bar.center().y);
         visual.simulate_mouse_move(button, None, Modifiers::none());
+        draw(&mut visual);
         visual.simulate_click(button, Modifiers::none());
-        assert!(prompter.read_with(cx, |view, _| view.is_playing()));
+        prompter.read_with(cx, |view, _| {
+            assert!(
+                view.is_playing(),
+                "mode={}, max_scroll={}, position={}, bar={bar:?}, click={button:?}",
+                view.voice_mode,
+                view.maximum_scroll(),
+                view.position,
+            );
+        });
 
         visual.run_until_parked();
         visual.executor().advance_clock(BAR_REST);
@@ -2800,6 +2835,28 @@ mod tests {
         draw(&mut visual);
         visual.simulate_mouse_up(button, MouseButton::Left, Modifiers::none());
         assert!(!prompter.read_with(cx, |view, _| view.is_playing()));
+
+        let offset = prompter.read_with(cx, |view, _| view.scroll.offset());
+        visual.update(|window, cx| {
+            prompter.update(cx, |view, cx| {
+                view.set_voice_mode(true, window, cx);
+                view.fail_follow_for_test();
+            });
+        });
+        draw(&mut visual);
+        let status = visual.debug_bounds("prompter-follow-status").unwrap();
+        let fallback = point(status.right() - px(24.), status.center().y);
+        visual.simulate_mouse_move(fallback, None, Modifiers::none());
+        draw(&mut visual);
+        visual.simulate_click(fallback, Modifiers::none());
+        draw(&mut visual);
+        prompter.read_with(cx, |view, _| {
+            assert!(!view.voice_mode);
+            assert!(!view.running());
+            assert_eq!(view.scroll.offset(), offset);
+        });
+        assert_eq!(visual.debug_bounds("prompter-bar"), Some(bar));
+        assert!(visual.debug_bounds("prompter-follow-status").is_none());
     }
 
     #[test]

@@ -125,6 +125,21 @@ const SEGMENT_PADDING_RIGHT: f32 = 10.;
 /// handles still own the outer pixels.
 pub const CAMERA3D_POSE_DOT: f32 = 6.;
 pub const CAMERA3D_POSE_DOT_INSET: f32 = 5.;
+pub const KEYFRAME_MARK: f32 = 9.;
+const KEYFRAME_MARK_INSET: f32 = 3.;
+
+/// Where a keyframe's diamond is centred inside its clip box, in pixels from
+/// the box's left edge. Marks at the very ends are pulled inside so the box's
+/// rounded clip does not cut them in half.
+pub fn keyframe_mark_x(local_time: f64, secs_per_pixel: f64, width: f64) -> f64 {
+    let half = f64::from(KEYFRAME_MARK) / 2. + 1.;
+    let x = local_time / secs_per_pixel;
+    if width <= half * 2. {
+        width / 2.
+    } else {
+        x.clamp(half, width - half)
+    }
+}
 /// The waveform's ceiling inside a row, so it never climbs into the labels.
 const WAVEFORM_MAX_HEIGHT: f32 = 18.;
 
@@ -1263,6 +1278,8 @@ pub enum SegmentDetail {
     Image {
         name: SharedString,
         enabled: bool,
+        /// Keyframe times inside the layer, in seconds from its start.
+        keyframes: Arc<[f64]>,
     },
     /// `TL/ClipTrack.tsx`. `start`/`end` above are the **output-time** box;
     /// these carry the recording-domain numbers the label reads.
@@ -1690,6 +1707,7 @@ impl TimelineModel {
                 detail: SegmentDetail::Image {
                     name: segment.name.clone().into(),
                     enabled: segment.enabled,
+                    keyframes: segment.visible_keyframe_times().collect(),
                 },
             })
             .collect();
@@ -3062,6 +3080,26 @@ fn render_segment(
                 dot.border(px(1.5))
                     .border_color(Hsla::from(theme.editor.accent))
             });
+        }
+    }
+
+    if let SegmentDetail::Image { keyframes, .. } = &segment.detail {
+        let tint = if selected {
+            Hsla::from(theme.editor.accent)
+        } else {
+            seg_label(theme, color)
+        };
+        for time in keyframes.iter() {
+            let center = keyframe_mark_x(*time, secs_per_pixel, f64::from(width)) as f32;
+            fill = fill.child(
+                svg()
+                    .path("icons/keyframe-filled.svg")
+                    .absolute()
+                    .left(px(center - KEYFRAME_MARK / 2.))
+                    .bottom(px(KEYFRAME_MARK_INSET))
+                    .size(px(KEYFRAME_MARK))
+                    .text_color(tint),
+            );
         }
     }
 

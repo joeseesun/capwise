@@ -27,11 +27,34 @@ pub(super) struct Source {
     authorization: Option<oneshot::Receiver<Authorization>>,
 }
 
-pub(super) fn authorize(script: &str, offset: usize) -> Result<Source, FollowPhase> {
-    if NSBundle::mainBundle()
+fn speech_usage_declared() -> bool {
+    NSBundle::mainBundle()
         .objectForInfoDictionaryKey(ns_string!("NSSpeechRecognitionUsageDescription"))
-        .is_none()
-    {
+        .is_some()
+}
+
+fn local_recognizer(locale: &str) -> Option<Retained<SFSpeechRecognizer>> {
+    autoreleasepool(|_| unsafe {
+        let locale = NSLocale::localeWithLocaleIdentifier(&NSString::from_str(locale));
+        SFSpeechRecognizer::initWithLocale(SFSpeechRecognizer::alloc(), &locale)
+            .filter(|recognizer| recognizer.supportsOnDeviceRecognition())
+    })
+}
+
+pub(super) fn supports_local_follow(script: &str) -> bool {
+    speech_usage_declared() && local_recognizer(&locale_for_script(script, 0)).is_some()
+}
+
+pub(super) fn can_auto_start() -> bool {
+    unsafe { SFSpeechRecognizer::authorizationStatus() != Authorization::NotDetermined }
+}
+
+pub(super) fn authorize(script: &str, offset: usize) -> Result<Source, FollowPhase> {
+    if !speech_usage_declared() {
+        return Err(UNAVAILABLE);
+    }
+    let locale = locale_for_script(script, offset);
+    if local_recognizer(&locale).is_none() {
         return Err(UNAVAILABLE);
     }
     let authorization = match unsafe { SFSpeechRecognizer::authorizationStatus() } {
@@ -51,16 +74,19 @@ pub(super) fn authorize(script: &str, offset: usize) -> Result<Source, FollowPha
         }
         _ => return Err(FollowPhase::Failed(Failure::Permission)),
     };
-    let preferred = NSLocale::currentLocale().localeIdentifier().to_string();
-    let text = script.get(offset..).unwrap_or(script);
-    let locale = speech_locale(
-        if text.trim().is_empty() { script } else { text },
-        &preferred,
-    );
     Ok(Source {
         locale,
         authorization,
     })
+}
+
+fn locale_for_script(script: &str, offset: usize) -> String {
+    let preferred = NSLocale::currentLocale().localeIdentifier().to_string();
+    let text = script.get(offset..).unwrap_or(script);
+    speech_locale(
+        if text.trim().is_empty() { script } else { text },
+        &preferred,
+    )
 }
 
 fn speech_locale(text: &str, preferred: &str) -> String {
@@ -264,16 +290,8 @@ async fn listen(
     packets: &flume::Receiver<MicPacket>,
     updates: &mpsc::Sender<SessionEvent>,
 ) -> Result<(), FollowPhase> {
-    let (recognizer, format) = autoreleasepool(|_| unsafe {
-        let locale = NSLocale::localeWithLocaleIdentifier(&NSString::from_str(locale));
-        let recognizer = SFSpeechRecognizer::initWithLocale(SFSpeechRecognizer::alloc(), &locale)
-            .ok_or(UNAVAILABLE)?;
-        if !recognizer.supportsOnDeviceRecognition() {
-            return Err(UNAVAILABLE);
-        }
-        let format = speech_format().ok_or(INTERRUPTED)?;
-        Ok((recognizer, format))
-    })?;
+    let recognizer = local_recognizer(locale).ok_or(UNAVAILABLE)?;
+    let format = autoreleasepool(|_| speech_format()).ok_or(INTERRUPTED)?;
     let origin = Instant::now();
     let mut announced = false;
     let mut retries = 0;
