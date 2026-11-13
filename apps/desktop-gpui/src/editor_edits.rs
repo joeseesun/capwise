@@ -691,7 +691,26 @@ impl TrackSegmentOps for MaskSegment {
 impl_track_segment!(TextSegment, lane: track);
 impl_track_segment!(ShapeSegment, lane: track);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
-impl_track_segment!(cap_project::ImageSegment, lane: track);
+impl TrackSegmentOps for cap_project::ImageSegment {
+    fn start(&self) -> f64 {
+        self.start
+    }
+    fn end(&self) -> f64 {
+        self.end
+    }
+    fn set_start(&mut self, value: f64) {
+        self.start = value;
+    }
+    fn set_end(&mut self, value: f64) {
+        self.end = value;
+    }
+    fn trim_start_to(&mut self, value: f64) {
+        self.trim_start_keeping_motion(value);
+    }
+    fn lane(&self) -> u32 {
+        self.track
+    }
+}
 
 impl TrackSegmentOps for CaptionTrackSegment {
     fn start(&self) -> f64 {

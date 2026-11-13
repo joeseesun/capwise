@@ -1906,6 +1906,20 @@ rounding = "Rounding"
 
 [editor.panel.keyboard]
 
+[editor.panel.keyframes]
+add = "Add keyframe"
+clear = "Clear keyframes"
+hint_active = "Changes at the playhead are saved as keyframes."
+hint_empty = "Add a keyframe, move the playhead, then move or restyle the picture. It animates between the two."
+hold = "Hold"
+linear = "Linear"
+next = "Next keyframe"
+previous = "Previous keyframe"
+remove = "Remove keyframe"
+smooth = "Smooth"
+title = "Keyframes"
+transition = "Motion"
+
 [editor.panel.mask]
 blur = "Blur"
 highlight = "Highlight"

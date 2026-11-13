@@ -1883,6 +1883,20 @@ rounding = "角丸"
 
 [editor.panel.keyboard]
 
+[editor.panel.keyframes]
+add = "キーフレームを追加"
+clear = "キーフレームを消去"
+hint_active = "再生ヘッド位置での変更はキーフレームとして記録されます。"
+hint_empty = "キーフレームを追加して再生ヘッドを動かし、画像を移動または調整すると、その間が自動でアニメーションします。"
+hold = "停止"
+linear = "等速"
+next = "次のキーフレーム"
+previous = "前のキーフレーム"
+remove = "キーフレームを削除"
+smooth = "スムーズ"
+title = "キーフレーム"
+transition = "動き"
+
 [editor.panel.mask]
 blur = "ぼかし"
 highlight = "強調"

@@ -104,6 +104,8 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "info.svg",
     "instant.svg",
     "keyboard.svg",
+    "keyframe.svg",
+    "keyframe-filled.svg",
     "layers.svg",
     "layout.svg",
     "logo-mark.svg",

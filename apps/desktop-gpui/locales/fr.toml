@@ -1883,6 +1883,20 @@ rounding = "Arrondi"
 
 [editor.panel.keyboard]
 
+[editor.panel.keyframes]
+add = "Ajouter une image clé"
+clear = "Effacer les images clés"
+hint_active = "Les modifications à la tête de lecture sont enregistrées comme images clés."
+hint_empty = "Ajoutez une image clé, déplacez la tête de lecture, puis déplacez ou ajustez l'image. Elle s'anime entre les deux."
+hold = "Maintenir"
+linear = "Linéaire"
+next = "Image clé suivante"
+previous = "Image clé précédente"
+remove = "Supprimer l'image clé"
+smooth = "Fluide"
+title = "Images clés"
+transition = "Mouvement"
+
 [editor.panel.mask]
 blur = "Flou"
 highlight = "Mise en valeur"

@@ -10,6 +10,7 @@ pub mod cursor;
 pub mod disfluency;
 pub mod filler_review;
 pub mod keyboard;
+mod keyframes;
 mod meta;
 mod overlay_image;
 mod overlays;
@@ -31,6 +32,7 @@ pub use caption_words::{
 pub use configuration::*;
 pub use cursor::*;
 pub use keyboard::*;
+pub use keyframes::*;
 pub use meta::*;
 pub use overlay_image::*;
 pub use overlays::*;

@@ -1883,6 +1883,20 @@ rounding = "Redondeo"
 
 [editor.panel.keyboard]
 
+[editor.panel.keyframes]
+add = "Añadir fotograma clave"
+clear = "Borrar fotogramas clave"
+hint_active = "Los cambios en el cabezal se guardan como fotogramas clave."
+hint_empty = "Añade un fotograma clave, mueve el cabezal y luego mueve o ajusta la imagen. Se anima entre ambos."
+hold = "Mantener"
+linear = "Lineal"
+next = "Fotograma clave siguiente"
+previous = "Fotograma clave anterior"
+remove = "Quitar fotograma clave"
+smooth = "Suave"
+title = "Fotogramas clave"
+transition = "Movimiento"
+
 [editor.panel.mask]
 blur = "Desenfoque"
 highlight = "Resaltar"

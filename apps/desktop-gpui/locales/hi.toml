@@ -1883,6 +1883,20 @@ rounding = "गोलाई"
 
 [editor.panel.keyboard]
 
+[editor.panel.keyframes]
+add = "कीफ़्रेम जोड़ें"
+clear = "कीफ़्रेम हटाएँ"
+hint_active = "प्लेहेड पर किए गए बदलाव कीफ़्रेम के रूप में सहेजे जाते हैं।"
+hint_empty = "कीफ़्रेम जोड़ें, प्लेहेड आगे बढ़ाएँ, फिर चित्र को हिलाएँ या बदलें। दोनों के बीच एनिमेशन अपने आप बनता है।"
+hold = "स्थिर"
+linear = "समान गति"
+next = "अगला कीफ़्रेम"
+previous = "पिछला कीफ़्रेम"
+remove = "कीफ़्रेम हटाएँ"
+smooth = "स्मूद"
+title = "कीफ़्रेम"
+transition = "गति"
+
 [editor.panel.mask]
 blur = "ब्लर"
 highlight = "हाइलाइट"
