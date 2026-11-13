@@ -3858,7 +3858,7 @@ apple_privacy = "Apple की डिवाइस पर होने वाल�
 apple_connecting = "Apple की वाक् पहचान शुरू हो रही है…"
 apple_permission = "सिस्टम सेटिंग्स में Capwise को वाक् पहचान की अनुमति दें।"
 apple_unavailable = "इस भाषा या Mac पर डिवाइस की वाक् पहचान उपलब्ध नहीं है।"
-apple_interrupted = "वाक् पहचान बाधित हुई। फिर से कोशिश करने के लिए माइक्रोफ़ोन बटन चुनें।"
+apple_interrupted = "वाक् पहचान बाधित हुई। फिर से कोशिश करने के लिए प्ले दबाएँ।"
 apple_manual = "वाक् अनुसरण रुका है। जारी रखने के लिए स्पेस दबाएँ।"
 waiting = "पढ़ने के लिए तैयार"
 pause_action = "रोकें"
@@ -3866,7 +3866,7 @@ start_action = "वाक् अनुसरण शुरू करें"
 scroll_action = "स्क्रॉल शुरू करें"
 previous_sentence = "पिछला वाक्य"
 next_sentence = "अगला वाक्य"
-scroll_mode = "स्क्रॉल का तरीका"
+use_steady = "स्थिर गति वाली स्क्रॉलिंग पर जाएँ"
 
 [editor.workbench]
 captions_hidden = "पूर्वावलोकन और निर्यात में उपशीर्षक छिपे हुए हैं।"
