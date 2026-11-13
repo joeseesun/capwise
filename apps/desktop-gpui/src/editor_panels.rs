@@ -9730,8 +9730,8 @@ impl EditorWindow {
             }))
             .child(image_slider(self, ImageProperty::Opacity, cx))
             .child(image_slider(self, ImageProperty::Rounding, cx))
-            .child(self.render_image_keyframes(index, cx))
             .child(self.render_image_motion(index, cx))
+            .child(self.render_image_keyframes(index, cx))
             .child(self.more_settings("image", cx, move |this, cx| {
                 let mut column = div().flex().flex_col().gap(px(14.)).child(image_slider(
                     this,

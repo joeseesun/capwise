@@ -4676,6 +4676,13 @@ impl EditorWindow {
             // `S` toggles the scissors (`Player.tsx:246-254`) and `C` performs
             // the cut (`TL/index.tsx:1007-1013`) -- two different keys, and
             // two different listeners in the source.
+            "k" | "[" | "]"
+                if !keystroke.modifiers.modified()
+                    && self.keyframe_shortcut(keystroke.key.as_str(), window, cx) =>
+            {
+                cx.stop_propagation();
+                window.refresh();
+            }
             "s" => {
                 cx.stop_propagation();
                 self.toggle_split_mode(cx);
@@ -12763,6 +12770,7 @@ impl EditorWindow {
                     .justify_end()
                     .items_center()
                     .child(self.render_markers_button(compact, cx))
+                    .child(self.render_keyframe_button(compact, cx))
                     .child(self.header_divider())
                     // The split toggle (`Player.tsx:409-427`).
                     .child(
