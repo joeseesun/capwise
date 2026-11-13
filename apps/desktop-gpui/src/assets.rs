@@ -401,6 +401,7 @@ mod tests {
         // from, so the table has to scan here too.
         include_str!("library.rs"),
         include_str!("controls_window.rs"),
+        include_str!("editor_keyframes.rs"),
         include_str!("camera_window.rs"),
         include_str!("editor_camera_framing.rs"),
         include_str!("target_overlay.rs"),
