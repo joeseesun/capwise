@@ -68,11 +68,16 @@ pub(crate) fn script_model() -> Option<ContentModel> {
     }
 }
 
-pub(crate) fn default_voice_follow() -> bool {
-    cfg!(target_os = "macos")
-        && preference(VOICE_FOLLOW)
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false)
+#[cfg(target_os = "macos")]
+pub(crate) fn default_voice_follow(script: &str) -> bool {
+    preference(VOICE_FOLLOW)
+        .and_then(|value| value.as_bool())
+        .unwrap_or_else(|| crate::teleprompter_window::supports_local_follow(script))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn default_voice_follow(_: &str) -> bool {
+    false
 }
 
 pub(crate) fn auto_start() -> bool {
@@ -93,7 +98,7 @@ fn label(model: &ContentModel) -> String {
     format!("{} · {}", model.provider_name(), model.model_name())
 }
 
-fn mode_label(voice: bool) -> &'static str {
+pub(crate) fn mode_label(voice: bool) -> &'static str {
     if voice {
         tr::dialog::teleprompter::follow::title()
     } else {
@@ -122,11 +127,14 @@ impl SettingsWindow {
                 }))
                 .collect()
             }
-            MenuKind::PrompterMode => [false, true]
-                .into_iter()
-                .filter(|voice| !*voice || cfg!(target_os = "macos"))
-                .map(|voice| ui::MenuItem::new(mode_label(voice), voice == default_voice_follow()))
-                .collect(),
+            MenuKind::PrompterMode => {
+                let selected = default_voice_follow(&TeleprompterState::load().script);
+                [false, true]
+                    .into_iter()
+                    .filter(|voice| !*voice || cfg!(target_os = "macos"))
+                    .map(|voice| ui::MenuItem::new(mode_label(voice), voice == selected))
+                    .collect()
+            }
             MenuKind::PrompterSpeed | MenuKind::PrompterNarrationSpeed => {
                 let current = if kind == MenuKind::PrompterSpeed {
                     TeleprompterState::load().words_per_minute
@@ -228,12 +236,11 @@ impl SettingsWindow {
             )
             .into_any_element();
         let writing = self.rows(vec![self.setting_row(copy::model(), None, model_control)]);
-        let voice = default_voice_follow();
-        let speed = TeleprompterState::load().words_per_minute;
+        let state = TeleprompterState::load();
         let speed_control = self
             .select(
                 "prompter-speed",
-                tr::dialog::teleprompter::words_per_minute(speed),
+                tr::dialog::teleprompter::words_per_minute(state.words_per_minute),
                 MenuKind::PrompterSpeed,
                 cx,
             )
@@ -243,7 +250,7 @@ impl SettingsWindow {
             let mode = self
                 .select(
                     "prompter-mode",
-                    mode_label(voice),
+                    mode_label(default_voice_follow(&state.script)),
                     MenuKind::PrompterMode,
                     cx,
                 )
