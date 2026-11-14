@@ -177,12 +177,27 @@ async function main() {
 			downloadedFfmpeg ||
 			(await missingFfmpegLibraries(ffmpegLibDir, "", "lib")).length > 0
 		) {
-			await exec(
-				`Expand-Archive -Path "${ffmpegZipPath}" -DestinationPath "${targetDir}" -Force`,
-				{ shell: "powershell.exe" },
+			const extractionDir = await fs.mkdtemp(
+				path.join(targetDir, "ffmpeg-extract-"),
 			);
-			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
-			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
+			try {
+				await execFile("tar.exe", ["xf", ffmpegZipPath, "-C", extractionDir]);
+				const extractedFfmpeg = path.join(extractionDir, FFMPEG_ZIP_NAME);
+				const missingLibraries = await missingFfmpegLibraries(
+					path.join(extractedFfmpeg, "lib"),
+					"",
+					"lib",
+				);
+				if (missingLibraries.length > 0) {
+					throw new Error(
+						`FFmpeg archive is missing libraries: ${missingLibraries.join(", ")}`,
+					);
+				}
+				await fs.rm(ffmpegDir, { recursive: true, force: true });
+				await fs.rename(extractedFfmpeg, ffmpegDir);
+			} finally {
+				await fs.rm(extractionDir, { recursive: true, force: true });
+			}
 			console.log("Extracted ffmpeg");
 		} else console.log("Using cached ffmpeg");
 
