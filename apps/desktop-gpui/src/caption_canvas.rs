@@ -107,6 +107,9 @@ pub(crate) struct CaptionCanvasEdit {
     translation: Option<TranslationLine>,
     before: Option<CaptionSnapshot>,
     auditioning: bool,
+    /// Where the caption was last drawn, for the frames that do not draw it
+    /// (its fade, the end of a Return playback).
+    rect: std::cell::Cell<Option<NormRect>>,
     _events: Vec<Subscription>,
 }
 
@@ -309,6 +312,7 @@ impl EditorWindow {
         if !self.project_ready() || self.voiceover.is_busy() {
             return;
         }
+        let previous_rect = self.caption_edit.as_ref().and_then(|edit| edit.rect.get());
         self.finish_caption_edit(window, cx);
         let Some(segment) = self.caption_segments().get(index).cloned() else {
             return;
@@ -397,6 +401,7 @@ impl EditorWindow {
             ));
         }
 
+        let rect = previous_rect.or_else(|| self.caption_drawn_rect());
         self.history.pause();
         self.caption_edit = Some(CaptionCanvasEdit {
             id: segment.id.clone(),
@@ -405,6 +410,7 @@ impl EditorWindow {
             translation,
             before: Some(CaptionSnapshot::take(&self.project)),
             auditioning: false,
+            rect: std::cell::Cell::new(rect),
             _events: events,
         });
         self.focus_caption_line(line, caret_at_start, window, cx);
@@ -453,13 +459,6 @@ impl EditorWindow {
         if edit.auditioning {
             edit.auditioning = false;
             self.stop_playback(cx);
-            if let Some(segment) = self
-                .caption_index(&id)
-                .and_then(|index| self.caption_segments().get(index))
-            {
-                let anchor = caption_anchor(segment);
-                self.seek_to_time(anchor, cx);
-            }
         }
         let Some(index) = self.caption_index(&id) else {
             return;
@@ -621,14 +620,6 @@ impl EditorWindow {
             return;
         }
         edit.auditioning = false;
-        let id = edit.id.clone();
-        if let Some(anchor) = self
-            .caption_index(&id)
-            .and_then(|index| self.caption_segments().get(index))
-            .map(caption_anchor)
-        {
-            self.seek_to_time(anchor, cx);
-        }
         self.publish_project();
         cx.notify();
     }
@@ -988,14 +979,22 @@ impl EditorWindow {
             .filter(|size| *size > 0.)
             .map_or(settings.size as f32 * ch / 1080., |size| size * scale)
             .max(12.);
-        let rect = self.caption_drawn_rect().unwrap_or(NormRect {
+        let drawn = self.caption_drawn_rect().filter(|_| {
+            !edit.auditioning && self.caption_index_at(self.playhead_time()) == Some(index)
+        });
+        if drawn.is_some() {
+            edit.rect.set(drawn);
+        }
+        let rect = drawn.or(edit.rect.get()).unwrap_or(NormRect {
             x: 0.1,
             y: 0.78,
             w: 0.8,
             h: 0.12,
         });
         let pad = (font_size * 0.4).max(6.);
-        let width = (rect.w as f32 * cw).max(font_size * 6.).min(cw);
+        let width = (rect.w as f32 * cw + font_size * 2.)
+            .max(font_size * 8.)
+            .min(cw * 0.96);
         let left = (rect.x as f32 * cw + rect.w as f32 * cw / 2. - width / 2.)
             .clamp(0., (cw - width).max(0.));
         let bottom_anchored = rect.y + rect.h / 2. > 0.5;
@@ -1175,14 +1174,8 @@ mod tests {
                 ("页面", 11.6, 12.0),
             ],
         );
-        assert_eq!(
-            split(&caption, "打开".len()),
-            Some(("打开".len(), 10.7))
-        );
-        assert_eq!(
-            split(&caption, "打开设".len()),
-            Some(("打开".len(), 10.7))
-        );
+        assert_eq!(split(&caption, "打开".len()), Some(("打开".len(), 10.7)));
+        assert_eq!(split(&caption, "打开设".len()), Some(("打开".len(), 10.7)));
     }
 
     #[test]
