@@ -2052,13 +2052,22 @@ impl EditorWindow {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.slider_field(
+        let field = self.slider_field(
             label,
             SliderKey::Panel(PanelSlider::Shape(property), index),
             unit,
             cx,
-        )
-        .into_any_element()
+        );
+        if property == ShapeProperty::Opacity {
+            return self.keyframe_slider(
+                crate::editor_timeline::TrackKind::Shape,
+                index,
+                "opacity",
+                field,
+                cx,
+            );
+        }
+        field.into_any_element()
     }
 
     pub(crate) fn render_shape_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {

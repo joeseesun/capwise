@@ -2047,6 +2047,9 @@ pub struct SegmentUi<'a> {
     /// Which end of the selected 3D shot the panel is editing, for the pose
     /// dots on its box.
     pub camera3d_editing_end: bool,
+    /// The keyframe picked on the timeline: its track, segment and time in
+    /// seconds from that segment's start.
+    pub selected_keyframe: Option<(TrackKind, usize, f64)>,
 }
 
 impl SegmentUi<'_> {
@@ -2495,6 +2498,9 @@ fn render_track_content(
                 ui.is_hovered(*kind, row.lane, index),
                 ui.split_mode,
                 ui.camera3d_editing_end,
+                ui.selected_keyframe
+                    .filter(|(track, segment, _)| (*track, *segment) == (*kind, index))
+                    .map(|(_, _, time)| time),
             ));
         }
     }
@@ -2930,6 +2936,7 @@ fn render_segment(
     hovered: bool,
     split_mode: bool,
     camera3d_editing_end: bool,
+    selected_keyframe: Option<f64>,
 ) -> AnyElement {
     let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
         muted_clip_color(theme)
@@ -3104,14 +3111,26 @@ fn render_segment(
         };
         for time in keyframes.iter() {
             let center = keyframe_mark_x(*time, secs_per_pixel, f64::from(width)) as f32;
+            let picked = selected_keyframe.is_some_and(|picked| (picked - time).abs() < 1e-6);
+            let size = if picked {
+                KEYFRAME_MARK + 4.
+            } else if hovered || selected {
+                KEYFRAME_MARK + 2.
+            } else {
+                KEYFRAME_MARK
+            };
             fill = fill.child(
                 svg()
                     .path("icons/keyframe-filled.svg")
                     .absolute()
-                    .left(px(center - KEYFRAME_MARK / 2.))
-                    .bottom(px(KEYFRAME_MARK_INSET))
-                    .size(px(KEYFRAME_MARK))
-                    .text_color(tint),
+                    .left(px(center - size / 2.))
+                    .bottom(px(KEYFRAME_MARK_INSET - (size - KEYFRAME_MARK) / 2.))
+                    .size(px(size))
+                    .text_color(if picked {
+                        Hsla::from(theme.editor.text_1)
+                    } else {
+                        tint
+                    }),
             );
         }
     }

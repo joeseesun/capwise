@@ -5656,10 +5656,17 @@ impl EditorWindow {
                         cx,
                     ))
                     .when(include_size, |column| {
-                        column.child(self.slider_field(
+                        let field = self.slider_field(
                             tr::editor::panel::text_segment::font_size(),
                             SliderKey::Panel(PanelSlider::TextFontSize, index),
                             "int",
+                            cx,
+                        );
+                        column.child(self.keyframe_slider(
+                            TrackKind::Text,
+                            index,
+                            "size",
+                            field,
                             cx,
                         ))
                     }),
@@ -5957,12 +5964,15 @@ impl EditorWindow {
                                 "x100%",
                                 cx,
                             ))
-                            .child(self.slider_field(
-                                tr::editor::panel::opacity(),
-                                SliderKey::Panel(PanelSlider::TextOpacity, index),
-                                "x100%",
-                                cx,
-                            )),
+                            .child({
+                                let field = self.slider_field(
+                                    tr::editor::panel::opacity(),
+                                    SliderKey::Panel(PanelSlider::TextOpacity, index),
+                                    "x100%",
+                                    cx,
+                                );
+                                self.keyframe_slider(TrackKind::Text, index, "opacity", field, cx)
+                            }),
                     ),
                 )
                 .into_any_element(),
@@ -6409,12 +6419,15 @@ impl EditorWindow {
             .flex_col()
             .gap(px(16.))
             .child(track_row)
-            .child(self.slider_field(
-                tr::editor::panel::audio::volume(),
-                SliderKey::Panel(PanelSlider::AudioVolume, index),
-                "volume",
-                cx,
-            ))
+            .child({
+                let field = self.slider_field(
+                    tr::editor::panel::audio::volume(),
+                    SliderKey::Panel(PanelSlider::AudioVolume, index),
+                    "volume",
+                    cx,
+                );
+                self.keyframe_slider(TrackKind::Audio, index, "volume", field, cx)
+            })
             .child(self.render_keyframes(TrackKind::Audio, index, cx))
             .child(
                 div()
@@ -6568,6 +6581,7 @@ impl EditorWindow {
             )
             .into_any_element()
         };
+        let strength = self.keyframe_slider(TrackKind::Mask, index, "strength", strength, cx);
 
         div()
             .flex()
@@ -9747,7 +9761,7 @@ impl EditorWindow {
                 })),
             );
         let image_slider = |this: &Self, property: ImageProperty, cx: &mut Context<Self>| {
-            this.slider_field(
+            let field = this.slider_field(
                 property.label(),
                 SliderKey::Panel(PanelSlider::Image(property), index),
                 if property == ImageProperty::Rotation {
@@ -9756,8 +9770,16 @@ impl EditorWindow {
                     "%"
                 },
                 cx,
-            )
-            .into_any_element()
+            );
+            match property {
+                ImageProperty::Rounding => field.into_any_element(),
+                ImageProperty::Opacity => {
+                    this.keyframe_slider(TrackKind::Image, index, "opacity", field, cx)
+                }
+                ImageProperty::Rotation => {
+                    this.keyframe_slider(TrackKind::Image, index, "rotation", field, cx)
+                }
+            }
         };
 
         div()

@@ -1542,6 +1542,7 @@ pub struct EditorWindow {
     /// The segment under the pointer: `(track, lane, index)`. This is the
     /// `group-hover` the trim handles' reveal hangs off.
     hovered_segment: Option<(TrackKind, u32, usize)>,
+    pub(crate) selected_keyframe: Option<(TrackKind, usize, f64)>,
     scene_preview_time: Option<f64>,
     /// The gutter chip under the pointer, which is what reveals the red
     /// per-track delete button (`TL/index.tsx:1516-1546`, `group/icon`).
@@ -2342,6 +2343,7 @@ impl EditorWindow {
             split_mode: false,
             split_preview: None,
             hovered_segment: None,
+            selected_keyframe: None,
             scene_preview_time: None,
             hovered_gutter: None,
             hovered_row: None,
@@ -4512,7 +4514,9 @@ impl EditorWindow {
         // is checked before the modifier gates below for that reason.
         if keystroke.key.as_str() == "backspace" {
             cx.stop_propagation();
-            self.delete_selection(window, cx);
+            if !self.delete_selected_keyframe(window, cx) {
+                self.delete_selection(window, cx);
+            }
             return;
         }
 
@@ -4671,7 +4675,9 @@ impl EditorWindow {
             // is the same split `e.code` makes.
             "delete" => {
                 cx.stop_propagation();
-                self.delete_selection(window, cx);
+                if !self.delete_selected_keyframe(window, cx) {
+                    self.delete_selection(window, cx);
+                }
             }
             // `S` toggles the scissors (`Player.tsx:246-254`) and `C` performs
             // the cut (`TL/index.tsx:1007-1013`) -- two different keys, and
@@ -5031,6 +5037,11 @@ impl EditorWindow {
         let right = left + timeline::content_width(viewport_width);
         let x = f32::from(event.position.x).clamp(left, right);
         let time = self.time_at(x, viewport_width);
+        let time = if event.modifiers.platform || event.modifiers.control {
+            time
+        } else {
+            self.snap_to_keyframe(time, self.secs_per_pixel(viewport_width))
+        };
         // No throttle: `preview_tx` is a `watch`, so a push that a newer one
         // supersedes is simply overwritten, and the preview renderer cancels
         // in-flight work when it sees a newer instruction
@@ -5124,6 +5135,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         if self.selection != selection {
+            self.selected_keyframe = None;
             self.stop_canvas_text_edit(cx);
             self.text_menu = None;
             self.style_presets.close_menu();
@@ -5453,13 +5465,9 @@ impl EditorWindow {
         } else {
             None
         };
-        let keyframe_press = (matches!(hit, Hit::Body { .. })
-            && self
-                .selection
-                .as_ref()
-                .is_some_and(|selection| selection.contains(kind, index)))
-        .then(|| self.keyframe_hit(kind, index, x, secs_per_pixel))
-        .flatten();
+        let keyframe_press = matches!(hit, Hit::Body { .. })
+            .then(|| self.keyframe_hit(kind, index, x, secs_per_pixel))
+            .flatten();
         let press_time = keyframe_press.map_or(press_time, |(_, time)| time);
         let kind_of_drag = match (kind, hit) {
             _ if keyframe_press.is_some() => {
@@ -7384,6 +7392,10 @@ impl EditorWindow {
             );
             self.set_selection(selection, cx);
             self.seek_to_time(drag.press_time, cx);
+        }
+
+        if let DragKind::Keyframe { key, .. } = drag.kind {
+            self.select_keyframe(drag.track, drag.index, key);
         }
 
         if drag.moved && drag.track == TrackKind::Caption {
@@ -13192,6 +13204,7 @@ impl EditorWindow {
             scene_preview_time: self.scene_preview_time,
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
+            selected_keyframe: self.selected_keyframe,
         };
         // The ghost trim and its release animation draw from a patched copy
         // of the model; everything else draws the real one.

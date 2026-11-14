@@ -193,6 +193,125 @@ impl EditorWindow {
         }
     }
 
+    pub(crate) fn select_keyframe(&mut self, kind: TrackKind, index: usize, key: usize) {
+        self.selected_keyframe = self
+            .keyframed(kind, index)
+            .and_then(|segment| segment.keyframe_times().get(key).copied())
+            .map(|time| (kind, index, time));
+    }
+
+    /// Removes the keyframe picked on the timeline. Returns false when none
+    /// is, so Delete can fall through to the selected segment.
+    pub(crate) fn delete_selected_keyframe(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((kind, index, local)) = self.selected_keyframe.take() else {
+            return false;
+        };
+        let Some(key) = self.keyframed(kind, index).and_then(|segment| {
+            segment
+                .keyframe_times()
+                .iter()
+                .position(|time| (time - local).abs() < 1e-6)
+        }) else {
+            return false;
+        };
+        let time = self.preview_or_playhead();
+        self.edit_keyframed("keyframe-delete", kind, index, window, cx, move |segment| {
+            segment.remove_keyframe(key, time)
+        });
+        true
+    }
+
+    /// A scrubbed time pulled onto a keyframe of the selected segment when it
+    /// passes within a few pixels, so going back to one to change it is easy.
+    pub(crate) fn snap_to_keyframe(&self, time: f64, secs_per_pixel: f64) -> f64 {
+        let Some(segment) = self
+            .keyframe_target()
+            .and_then(|(kind, index)| self.keyframed(kind, index))
+        else {
+            return time;
+        };
+        let (start, _) = segment.keyframe_span();
+        let reach = MARK_HIT_PX * secs_per_pixel;
+        segment
+            .visible_keyframe_times()
+            .into_iter()
+            .map(|local| start + local)
+            .filter(|key| (key - time).abs() <= reach)
+            .min_by(|a, b| (a - time).abs().total_cmp(&(b - time).abs()))
+            .map_or(time, |key| time_inside(segment, key))
+    }
+
+    /// A slider for an animated property with its keyframe diamond beside it,
+    /// lit when the playhead is on a keyframe. Segments that cannot be
+    /// keyframed get the slider alone.
+    pub(crate) fn keyframe_slider(
+        &self,
+        kind: TrackKind,
+        index: usize,
+        name: &'static str,
+        field: impl IntoElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(segment) = self.keyframed(kind, index) else {
+            return field.into_any_element();
+        };
+        let theme = self.theme;
+        let on_keyframe = segment
+            .keyframe_index_at(self.playhead_time(), KEYFRAME_TOLERANCE)
+            .is_some();
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .child(div().flex_1().min_w_0().child(field))
+            .child(
+                div()
+                    .id(SharedString::from(format!(
+                        "keyframe-mark-tip-{kind:?}-{index}-{name}"
+                    )))
+                    .flex_none()
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_, cx| {
+                        ui::Tooltip::new(
+                            &theme,
+                            if on_keyframe {
+                                tr::editor::panel::keyframes::remove()
+                            } else {
+                                tr::editor::panel::keyframes::add()
+                            },
+                        )
+                        .keys(["K"])
+                        .view(cx)
+                    })
+                    .child(
+                        ui::EditorButton::plain(
+                            &theme,
+                            SharedString::from(format!("keyframe-mark-{kind:?}-{index}-{name}")),
+                        )
+                        .width(px(22.))
+                        .height(px(22.))
+                        .padding_x(px(0.))
+                        .left_icon(if on_keyframe {
+                            "icons/keyframe-filled.svg"
+                        } else {
+                            "icons/keyframe.svg"
+                        })
+                        .icon_size(px(11.))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.toggle_keyframe(kind, index, window, cx);
+                            },
+                        )),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// The one segment the keyframe button and shortcuts act on.
     pub(crate) fn keyframe_target(&self) -> Option<(TrackKind, usize)> {
         let selection = self.selection.as_ref()?;
