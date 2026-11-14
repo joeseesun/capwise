@@ -2006,6 +2006,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         annotations: _,
         hidden_text_segments: _,
         editing_text_segment: _,
+        editing_caption: _,
         screen_motion_blur: _,
         screen_movement_spring: _,
         color_correction: _,

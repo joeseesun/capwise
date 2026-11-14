@@ -178,9 +178,6 @@ fn apply_translation_updates(
         return false;
     };
     let settings = &mut captions.settings;
-    if !settings.auto_update_translations {
-        return false;
-    }
     let current: HashMap<_, _> = sources(&timeline.caption_segments, settings)
         .into_iter()
         .map(|source| (source.id, source.text))
@@ -425,15 +422,27 @@ fn parse_reply(raw: &str, sources: &[Source]) -> Result<Vec<(String, String)>, S
     Ok(result)
 }
 
+fn original_settings(settings: &cap_project::CaptionSettings) -> cap_project::CaptionSettings {
+    cap_project::CaptionSettings {
+        filler_language: settings.filler_language.clone(),
+        show_filler_words: settings.show_filler_words,
+        ..Default::default()
+    }
+}
+
+/// The text a translation of `segment` is written against.
+pub(crate) fn translation_source_text(
+    segment: &CaptionTrackSegment,
+    settings: &cap_project::CaptionSettings,
+) -> String {
+    cap_project::caption_presentation_text(segment, &original_settings(settings))
+}
+
 fn sources(
     segments: &[CaptionTrackSegment],
     settings: &cap_project::CaptionSettings,
 ) -> Vec<Source> {
-    let original = cap_project::CaptionSettings {
-        filler_language: settings.filler_language.clone(),
-        show_filler_words: settings.show_filler_words,
-        ..Default::default()
-    };
+    let original = original_settings(settings);
     let mut seen = HashSet::new();
     segments
         .iter()
@@ -471,10 +480,7 @@ impl EditorWindow {
             return;
         };
         let state = &mut self.sidebar.caption_translation;
-        if !captions.settings.auto_update_translations
-            || state.running
-            || captions.settings.translations.is_empty()
-        {
+        if state.running || captions.settings.translations.is_empty() {
             state.clear_auto_update();
             return;
         }
@@ -628,37 +634,6 @@ impl EditorWindow {
                     .child(tr::editor::translation::service(&provider.provider_name())),
             );
         }
-        column = column.child(
-            ui::Field::inline(&theme, tr::editor::translation::auto_update()).value(
-                ui::Toggle::plain(
-                    &theme,
-                    "caption-translate-auto-update",
-                    settings.auto_update_translations,
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.edit_project_global_without_timeline(
-                        "caption-translate-auto-update",
-                        window,
-                        cx,
-                        |project| {
-                            let Some(captions) = project.captions.as_mut() else {
-                                return false;
-                            };
-                            captions.settings.auto_update_translations =
-                                !captions.settings.auto_update_translations;
-                            true
-                        },
-                    );
-                }))
-                .into_any_element(),
-            ),
-        );
-        column = column.child(
-            div()
-                .text_size(px(12.))
-                .text_color(Hsla::from(theme.gray_10))
-                .child(tr::editor::translation::auto_update_hint()),
-        );
         if let Some(status) = state.auto_status() {
             column = column.child(
                 div()
@@ -1487,7 +1462,8 @@ impl EditorWindow {
                 this.queue_caption_translation_update(window, cx);
                 this.invalidate_sidebar(cx);
             });
-        }).detach();
+        })
+        .detach();
     }
 
     fn save_translation_batch(

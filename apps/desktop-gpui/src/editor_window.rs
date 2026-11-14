@@ -1664,6 +1664,7 @@ pub struct EditorWindow {
     /// `editorState.canvasSelection`.
     pub(crate) canvas_selection: Option<crate::editor_canvas::CanvasSelection>,
     pub(crate) canvas_text_edit: Option<crate::editor_canvas::CanvasTextEdit>,
+    pub(crate) caption_edit: Option<crate::caption_canvas::CaptionCanvasEdit>,
     /// `hovered` on `ElementBox` (`CanvasElementsOverlay.tsx:790`).
     pub(crate) hovered_canvas: Option<crate::editor_canvas::CanvasSelection>,
     /// The live display/camera drag.
@@ -2254,6 +2255,7 @@ impl EditorWindow {
             },
         ));
         let markers_state = markers::MarkersState::new(window, cx, &mut text_events);
+        text_events.push(crate::caption_canvas::install_caption_keys(window, cx));
         let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
         let preview = cx.new(|_| PreviewFrameView::new(player_frame_rect.clone()));
         let editor = cx.entity();
@@ -2393,6 +2395,7 @@ impl EditorWindow {
             player_frame_rect,
             canvas_selection: None,
             canvas_text_edit: None,
+            caption_edit: None,
             hovered_canvas: None,
             player_panel_bounds: ui::SliderTrack::default(),
             player_panel_hovered: false,
@@ -3057,6 +3060,11 @@ impl EditorWindow {
     fn caption_content_changed(&mut self) {
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
+        self.caption_track_replaced();
+    }
+
+    /// The caption track changed under the views that draw it.
+    pub(crate) fn caption_track_replaced(&mut self) {
         self.transcript.dirty = true;
         if let Some(timeline) = self.project.timeline.as_ref() {
             self.timeline.caption = crate::editor_timeline::caption_track_segments(
@@ -3162,6 +3170,7 @@ impl EditorWindow {
             return;
         };
         let mut preview = self.project.clone();
+        preview.editing_caption = self.caption_edit_hides_caption();
         if let Some(edit) = &self.canvas_text_edit {
             preview.editing_text_segment = Some(edit.index);
             if let Some(segment) = preview
@@ -3216,6 +3225,7 @@ impl EditorWindow {
             return;
         }
         self.commit_caption_editor_edit(window, cx);
+        self.finish_caption_edit(window, cx);
         self.stop_canvas_text_edit(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
@@ -3233,6 +3243,7 @@ impl EditorWindow {
             return;
         }
         self.commit_caption_editor_edit(window, cx);
+        self.finish_caption_edit(window, cx);
         self.stop_canvas_text_edit(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
@@ -3752,6 +3763,7 @@ impl EditorWindow {
             && next >= until - 1. / f64::from(EDITOR_PREVIEW_FPS)
         {
             self.stop_playback(cx);
+            self.caption_audition_ended(cx);
         }
 
         if self.playing && self.is_at_end() {
@@ -4765,6 +4777,12 @@ impl EditorWindow {
             {
                 cx.stop_propagation();
                 window.refresh();
+            }
+            "enter" if !keystroke.modifiers.modified() => {
+                if self.edit_selected_caption(window, cx) {
+                    cx.stop_propagation();
+                    window.refresh();
+                }
             }
             "s" => {
                 cx.stop_propagation();
@@ -6716,7 +6734,7 @@ fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
     }
 }
 
-fn split_caption_segment(
+pub(crate) fn split_caption_segment(
     project: &mut ProjectConfiguration,
     index: usize,
     at: f64,
@@ -12577,12 +12595,25 @@ impl EditorWindow {
                     this.focus_root(window, cx);
                 }
             }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    if this.caption_double_click_while_playing(event, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .child(body)
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
             .children(if self.project_ready() {
                 self.render_canvas_overlay(cx)
+            } else {
+                None
+            })
+            .children(if self.project_ready() {
+                self.render_caption_edit(cx)
             } else {
                 None
             })
@@ -14176,6 +14207,7 @@ fn is_playback_shortcut(
 
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_caption_edit(window, cx);
         if self.audio_picker.is_none() && !self.voiceover.is_open() {
             self.library_audition = None;
         }

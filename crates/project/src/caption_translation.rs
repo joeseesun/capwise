@@ -20,12 +20,15 @@ pub struct CaptionTranslation {
 }
 
 impl CaptionSettings {
+    /// The translation still written for `source_text`. Punctuation, spacing
+    /// and letter case do not change what a line says, so an edit to only
+    /// those keeps its translation.
     pub fn translation_for(&self, id: &str, source_text: &str) -> Option<&CaptionTranslation> {
-        let source_text = caption_display_text(source_text);
+        let source_text = translation_key(source_text);
         [id, source_caption_id(id)].into_iter().find_map(|key| {
             self.translations.get(key).filter(|translation| {
                 !translation.text.trim().is_empty()
-                    && caption_display_text(&translation.source_text) == source_text
+                    && translation_key(&translation.source_text) == source_text
             })
         })
     }
@@ -40,6 +43,13 @@ impl CaptionSettings {
             },
         );
     }
+}
+
+fn translation_key(text: &str) -> String {
+    text.chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 pub fn caption_presentation_text(
@@ -179,6 +189,21 @@ mod tests {
             caption_presentation_text(&segment("intro", "停止录制"), &settings),
             "停止录制"
         );
+    }
+
+    #[test]
+    fn punctuation_spacing_and_case_edits_keep_the_translation() {
+        let mut settings = bilingual();
+        settings.set_translation("demo", "Open the app", "打开应用".into(), "zh".into());
+        assert!(settings.translation_for("intro", "开始录制。").is_some());
+        assert!(settings.translation_for("intro", "开始，录制！").is_some());
+        assert!(
+            settings
+                .translation_for("demo", "open the app...")
+                .is_some()
+        );
+        assert!(settings.translation_for("demo", "Open the apps").is_none());
+        assert!(settings.translation_for("intro", "开始录屏").is_none());
     }
 
     #[test]

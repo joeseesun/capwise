@@ -638,14 +638,28 @@ impl EditorWindow {
         self.canvas_overlay_visible() && !self.pane_scene() && self.camera_rect().is_some()
     }
 
+    /// The caption's box on the preview. A manual caption is placed from its
+    /// stored centre so a drag never waits on a frame; a preset one is where
+    /// the renderer drew it.
     fn caption_rect(&self) -> Option<NormRect> {
         let layout = self.frame_layout.as_ref()?;
         let captions = self.project.captions.as_ref()?;
+        if !captions.settings.enabled {
+            return None;
+        }
         caption_canvas_rect(layout, captions.settings.manual_position)
+            .or_else(|| self.caption_drawn_rect())
+    }
+
+    fn caption_manual(&self) -> bool {
+        self.frame_layout
+            .as_ref()
+            .and_then(|layout| layout.caption)
+            .is_some_and(|caption| caption.is_manual())
     }
 
     fn show_captions(&self) -> bool {
-        self.canvas_overlay_visible() && self.caption_rect().is_some()
+        self.canvas_overlay_visible() && !self.caption_edit_open() && self.caption_rect().is_some()
     }
 
     /// `displayDraggable()` (`:249`): the rendered display rect is
@@ -786,6 +800,44 @@ impl EditorWindow {
         if matches!(element, CanvasSelection::Text(_)) {
             self.assistant.open = false;
             self.sidebar.tab = crate::editor_sidebar::SidebarTab::Captions;
+        }
+        if element == CanvasSelection::Captions {
+            let Some(index) = self.caption_index_at(self.preview_or_playhead()) else {
+                return;
+            };
+            self.assistant.open = false;
+            if event.click_count == 2 {
+                let line = self.caption_rect().and_then(|rect| {
+                    let frame = self.canvas_bounds()?;
+                    let y = f64::from(
+                        f32::from(event.position.y - frame.origin.y)
+                            / f32::from(frame.size.height).max(1.),
+                    );
+                    Some(if y > rect.y + rect.h * 0.6 {
+                        crate::caption_canvas::CaptionLine::Translation
+                    } else {
+                        crate::caption_canvas::CaptionLine::Source
+                    })
+                });
+                let bilingual = self.project.captions.as_ref().is_some_and(|captions| {
+                    captions.settings.display_mode == cap_project::CaptionDisplayMode::Bilingual
+                });
+                self.begin_caption_edit(index, line.filter(|_| bilingual), false, window, cx);
+                return;
+            }
+            self.set_selection_with_scroll(
+                Some(crate::editor_edits::Selection::single(
+                    TrackKind::Caption,
+                    index,
+                )),
+                true,
+                cx,
+            );
+            self.canvas_selection = Some(element);
+            if !self.caption_manual() {
+                cx.notify();
+                return;
+            }
         }
         if let Some((kind, index)) = element.timeline_selection() {
             self.canvas_selection = Some(element);
@@ -1953,7 +2005,7 @@ impl EditorWindow {
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_)
             | CanvasSelection::Shape(_) => (true, true, None),
-            CanvasSelection::Captions => (true, false, None),
+            CanvasSelection::Captions => (self.caption_manual(), false, None),
         };
         let has_handles = element != CanvasSelection::Captions;
 
@@ -1979,7 +2031,9 @@ impl EditorWindow {
             .top(px(top))
             .w(px(width))
             .h(px(height))
-            .cursor(if draggable {
+            .cursor(if element == CanvasSelection::Captions && !draggable {
+                CursorStyle::IBeam
+            } else if draggable {
                 CursorStyle::OpenHand
             } else {
                 CursorStyle::Arrow
@@ -2028,7 +2082,11 @@ impl EditorWindow {
                     .text_size(px(11.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(gpui::white())
-                    .child(element.label()),
+                    .child(if element == CanvasSelection::Captions {
+                        tr::editor::canvas::caption_hint().into()
+                    } else {
+                        element.label()
+                    }),
             );
 
             if let Some(message) = locked_message {

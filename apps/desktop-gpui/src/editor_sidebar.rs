@@ -1114,6 +1114,11 @@ impl EditorWindow {
         self.assistant.skill_menu = false;
         self.focus_root(window, cx);
         self.sidebar.scroll.set_offset(gpui::point(px(0.), px(0.)));
+        if tab == SidebarTab::Captions
+            && let Some(index) = self.caption_index_at(self.playhead_time())
+        {
+            self.sidebar.caption_page = index / crate::editor_workbench::CAPTIONS_PER_PAGE;
+        }
         cx.notify();
         window.refresh();
     }
