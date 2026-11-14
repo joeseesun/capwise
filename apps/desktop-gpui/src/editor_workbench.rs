@@ -125,6 +125,7 @@ impl EditorWindow {
             .caption_page
             .min(segments.len().saturating_sub(1) / CAPTIONS_PER_PAGE);
         let pages = segments.len().div_ceil(CAPTIONS_PER_PAGE).max(1);
+        let review = self.caption_review_marks();
         // A subtitle list the way CapCut and Descript show one: the start time
         // in a narrow column, the line beside it, the selected line tinted and
         // opened in place. No numbering, rules or instructions.
@@ -196,7 +197,14 @@ impl EditorWindow {
                                             .line_height(px(20.))
                                             .text_color(Hsla::from(theme.editor.text_1))
                                             .child(
-                                                self.render_caption_review_text(&segment.id)
+                                                review
+                                                    .as_ref()
+                                                    .and_then(|review| {
+                                                        self.render_caption_review_text(
+                                                            &segment.id,
+                                                            review,
+                                                        )
+                                                    })
                                                     .unwrap_or_else(|| {
                                                         segment.text.clone().into_any_element()
                                                     }),

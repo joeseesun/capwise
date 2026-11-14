@@ -2999,6 +2999,83 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// One keystroke in a caption's text box. The full write path would
+    /// rebuild every timeline track, re-plan translations and re-render every
+    /// editor section per character; a text change only moves the caption
+    /// track, the sidebar list and the preview. Translations catch up when
+    /// the box commits.
+    pub(crate) fn edit_caption_text_live(&mut self, index: usize, text: String) -> bool {
+        if !self.project_ready() || self.voiceover.is_busy() {
+            return false;
+        }
+        let Some(segment) = self
+            .project
+            .timeline
+            .as_mut()
+            .and_then(|timeline| timeline.caption_segments.get_mut(index))
+        else {
+            return false;
+        };
+        if segment.text == text {
+            return false;
+        }
+        segment.text = text;
+        crate::transcription::write_caption_edit_to_source(
+            &mut self.project,
+            index,
+            &self.clip_display_durations,
+        );
+        self.caption_content_changed();
+        true
+    }
+
+    /// A write that only touched caption text or words, through the parts of
+    /// the shared fan-out it can affect. The timeline model reads nothing of
+    /// the captions but their track's boxes and labels, so only that track is
+    /// rebuilt.
+    pub(crate) fn edit_caption_content(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) -> bool {
+        if !self.project_ready() || self.voiceover.is_busy() {
+            return false;
+        }
+        if !change(&mut self.project) {
+            return false;
+        }
+        self.caption_content_changed();
+        self.schedule_save(window, cx);
+        self.queue_caption_translation_update(window, cx);
+        self.invalidate_caption_views(cx);
+        tracing::info!(reason, undo = self.history.can_undo(), "caption edit");
+        true
+    }
+
+    fn caption_content_changed(&mut self) {
+        self.synchronize_caption_track(false);
+        self.history.record(&self.project);
+        self.transcript.dirty = true;
+        if let Some(timeline) = self.project.timeline.as_ref() {
+            self.timeline.caption = crate::editor_timeline::caption_track_segments(
+                &timeline.caption_segments,
+                self.timeline.total_duration,
+            );
+        }
+        self.publish_project();
+    }
+
+    /// Every section that draws caption text or the undo state a caption
+    /// edit moves. The toolbar and transport stay cached.
+    pub(crate) fn invalidate_caption_views(&mut self, cx: &mut Context<Self>) {
+        self.header.update(cx, |_, cx| cx.notify());
+        self.sidebar_view.update(cx, |_, cx| cx.notify());
+        self.transcript_view.update(cx, |_, cx| cx.notify());
+        self.timeline_view.update(cx, |_, cx| cx.notify());
+    }
+
     /// Swaps refined word times into the project and into every undo entry
     /// they apply to, so the refinement is not an undo step of its own and
     /// undoing an earlier edit keeps the refined times.

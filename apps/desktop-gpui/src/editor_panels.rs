@@ -3252,13 +3252,14 @@ impl EditorWindow {
                 self.commit_title_card_field(index, key, text, final_commit, window, cx);
             }
             FieldKey::CaptionText(index) => {
-                self.edit_caption_segment("caption-text", index, window, cx, move |segment| {
-                    if segment.text == text {
-                        return false;
-                    }
-                    segment.text = text;
-                    true
-                });
+                if self.edit_caption_text_live(index, text) {
+                    self.schedule_save(window, cx);
+                    self.invalidate_caption_views(cx);
+                }
+                if final_commit {
+                    self.queue_caption_translation_update(window, cx);
+                    self.note_project_edit("caption-text");
+                }
             }
             FieldKey::AudioName(index) => {
                 self.edit_audio_segment("audio-name", index, window, cx, move |segment| {

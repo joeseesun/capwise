@@ -293,25 +293,29 @@ fn delete_key(kind: Kind, id: &str) -> Result<(), String> {
     })
 }
 
-fn section() -> Map<String, Value> {
-    store::store_section(SECTION)
+fn read_section<R>(read: impl FnOnce(&Map<String, Value>) -> Option<R>) -> Option<R> {
+    store::with_store_section(SECTION, |section| section.and_then(read))
 }
 
 pub fn endpoint(kind: Kind, id: &str) -> Option<Endpoint> {
-    let entry = section().get(kind.slug())?.get(id)?.clone();
-    Some(Endpoint {
-        base_url: entry.get("baseUrl")?.as_str()?.to_string(),
-        model: entry.get("model")?.as_str()?.to_string(),
+    read_section(|section| {
+        let entry = section.get(kind.slug())?.get(id)?;
+        Some(Endpoint {
+            base_url: entry.get("baseUrl")?.as_str()?.to_string(),
+            model: entry.get("model")?.as_str()?.to_string(),
+        })
     })
 }
 
 /// The services of `kind` that have saved settings, in the order saved.
 pub fn saved_ids(kind: Kind) -> Vec<String> {
-    section()
-        .get(kind.slug())
-        .and_then(Value::as_object)
-        .map(|entries| entries.keys().cloned().collect())
-        .unwrap_or_default()
+    read_section(|section| {
+        section
+            .get(kind.slug())
+            .and_then(Value::as_object)
+            .map(|entries| entries.keys().cloned().collect())
+    })
+    .unwrap_or_default()
 }
 
 pub fn set_endpoint(kind: Kind, id: &str, endpoint: &Endpoint) -> bool {
@@ -361,10 +365,12 @@ pub fn remove_checked(kind: Kind, id: &str) -> Result<(), String> {
 }
 
 pub fn llm_default() -> Option<String> {
-    section()
-        .get(LLM_DEFAULT)
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    read_section(|section| {
+        section
+            .get(LLM_DEFAULT)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
 }
 
 pub fn set_llm_default(id: &str) -> bool {
