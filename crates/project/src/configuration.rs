@@ -1201,6 +1201,11 @@ pub struct MaskSegment {
     pub fade_duration: f64,
     #[serde(default)]
     pub keyframes: MaskKeyframes,
+    /// Whole-pose keyframes. While any exist they decide `center`, `size`
+    /// and `opacity` and the older per-property `keyframes` are not read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[specta(skip)]
+    pub motion: Vec<crate::LayerKeyframe>,
 }
 
 impl MaskSegment {
@@ -1357,6 +1362,11 @@ pub struct TextSegment {
         skip_serializing_if = "Option::is_none"
     )]
     pub title_card: Option<crate::TitleCard>,
+    /// Whole-pose keyframes. While any exist they decide `center`, `size`
+    /// and `opacity`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[specta(skip)]
+    pub keyframes: Vec<crate::LayerKeyframe>,
 }
 
 impl TextSegment {
@@ -1824,6 +1834,11 @@ pub struct AudioTrackSegment {
     /// without re-decoding the file.
     #[serde(default)]
     pub duration: Option<f64>,
+    /// While any exist they decide the clip's level; `volume_db` mirrors the
+    /// opening one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[specta(skip)]
+    pub volume_keyframes: Vec<crate::VolumeKeyframe>,
 }
 
 impl AudioTrackSegment {
@@ -1923,6 +1938,7 @@ pub struct ImageSegment {
     /// `rotation` and `opacity`; those fields mirror the first keyframe so
     /// builds without keyframes still place the picture sensibly.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[specta(skip)]
     pub keyframes: Vec<crate::LayerKeyframe>,
 }
 
@@ -4931,6 +4947,7 @@ mod tests {
 
     fn fullscreen_text(start: f64, end: f64) -> TextSegment {
         TextSegment {
+            keyframes: Vec::new(),
             start,
             end,
             track: 0,
@@ -5954,6 +5971,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: vec![TextSegment {
+                    keyframes: Vec::new(),
                     start: 0.0,
                     end: 1.0,
                     track: 0,
@@ -6065,6 +6083,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: vec![TextSegment {
+                    keyframes: Vec::new(),
                     start: 0.0,
                     end: 1.0,
                     track: 0,

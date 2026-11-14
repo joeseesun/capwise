@@ -40,6 +40,7 @@ async fn main() {
     }];
     for path in ["music-a.m4a", "music-b.m4a"].into_iter().take(count) {
         timeline.audio_segments.push(AudioTrackSegment {
+            volume_keyframes: Vec::new(),
             start: 0.0,
             end: 1200.0,
             track: 0,

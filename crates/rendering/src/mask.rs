@@ -92,6 +92,8 @@ pub fn interpolate_masks(
         .collect::<Vec<_>>();
     ordered.sort_by_key(|segment| segment.track);
     for segment in ordered {
+        let segment = segment.resolved_at(frame_time);
+        let segment = segment.as_ref();
         let relative_time = (frame_time - segment.start).max(0.0);
 
         let position =
@@ -192,6 +194,7 @@ mod tests {
 
     fn sample_segment() -> MaskSegment {
         MaskSegment {
+            motion: Vec::new(),
             start: 0.0,
             end: 10.0,
             track: 0,

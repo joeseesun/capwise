@@ -911,7 +911,7 @@ impl ImageLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cap_project::XY;
+    use cap_project::{Keyframed, XY};
 
     fn segment(path: &str) -> ImageSegment {
         ImageSegment {

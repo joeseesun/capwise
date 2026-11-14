@@ -353,6 +353,8 @@ pub fn prepare_texts(
         .collect::<Vec<_>>();
     ordered.sort_by_key(|(index, segment)| (segment.track, *index));
     for (_, segment) in ordered {
+        let segment = segment.resolved_at(frame_time);
+        let segment = segment.as_ref();
         let center = XY::new(
             segment.center.x.clamp(0.0, 1.0),
             segment.center.y.clamp(0.0, 1.0),
@@ -454,6 +456,7 @@ mod tests {
 
     fn segment(animation_in: TextAnimation, animation_out: TextAnimation) -> TextSegment {
         TextSegment {
+            keyframes: Vec::new(),
             start: 0.0,
             end: 10.0,
             track: 0,

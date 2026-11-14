@@ -9,6 +9,7 @@ use std::time::Instant;
 fn segment(index: usize, total: usize, active: usize) -> MaskSegment {
     let active = total > 0 && (index * 97) % total < active;
     MaskSegment {
+        motion: Vec::new(),
         start: if active { 0.0 } else { 20.0 + index as f64 },
         end: if active { 10.0 } else { 30.0 + index as f64 },
         track: ((index * 97) % 31) as u32,
