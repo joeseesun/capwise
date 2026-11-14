@@ -6430,6 +6430,18 @@ impl EditorWindow {
                 self.keyframe_slider(TrackKind::Audio, index, "volume", field, cx)
             })
             .child(self.render_keyframes(TrackKind::Audio, index, cx))
+            .child(self.slider_field(
+                tr::editor::panel::audio::fade_in(),
+                SliderKey::Panel(PanelSlider::AudioFadeIn, index),
+                "secs",
+                cx,
+            ))
+            .child(self.slider_field(
+                tr::editor::panel::audio::fade_out(),
+                SliderKey::Panel(PanelSlider::AudioFadeOut, index),
+                "secs",
+                cx,
+            ))
             .child(
                 div()
                     .flex()
@@ -6448,18 +6460,6 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .gap(px(14.))
-                    .child(this.slider_field(
-                        tr::editor::panel::audio::fade_in(),
-                        SliderKey::Panel(PanelSlider::AudioFadeIn, index),
-                        "secs",
-                        cx,
-                    ))
-                    .child(this.slider_field(
-                        tr::editor::panel::audio::fade_out(),
-                        SliderKey::Panel(PanelSlider::AudioFadeOut, index),
-                        "secs",
-                        cx,
-                    ))
                     .child(
                         ui::Field::stacked(&theme, tr::editor::panel::name())
                             .child(this.render_field_input(FieldKey::AudioName(index), None)),
