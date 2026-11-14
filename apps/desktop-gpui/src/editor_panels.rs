@@ -3614,10 +3614,11 @@ impl EditorWindow {
                     property.read(segment, self.preview_or_playhead())
                 })
             }
-            PanelSlider::Shape(property) => timeline
-                .shape_segments
-                .get(index)
-                .map_or(0., |segment| property.read(segment)),
+            PanelSlider::Shape(property) => {
+                timeline.shape_segments.get(index).map_or(0., |segment| {
+                    property.read(&segment.resolved_at(self.preview_or_playhead()))
+                })
+            }
             PanelSlider::StyleCameraOnlyPadding => timeline
                 .style_segments
                 .get(index)
@@ -3661,10 +3662,12 @@ impl EditorWindow {
                 let (min, max, _) = self.panel_slider_limits(slider, index);
                 let raw = match slider {
                     PanelSlider::TextLayoutTransition => segment.layout_transition as f32,
-                    PanelSlider::TextFontSize => segment.font_size,
+                    PanelSlider::TextFontSize => {
+                        segment.pose_at(self.preview_or_playhead()).font_size
+                    }
                     PanelSlider::TextLineHeight => segment.line_height,
                     PanelSlider::TextLetterSpacing => segment.letter_spacing,
-                    PanelSlider::TextOpacity => segment.opacity,
+                    PanelSlider::TextOpacity => segment.pose_at(self.preview_or_playhead()).opacity,
                     PanelSlider::TextShadow => segment.shadow,
                     PanelSlider::TextStroke => segment.stroke_width,
                     PanelSlider::TextGlow => segment.glow,
@@ -3680,7 +3683,10 @@ impl EditorWindow {
                 };
                 let (min, max, _) = self.panel_slider_limits(slider, index);
                 match slider {
-                    PanelSlider::AudioVolume => segment.volume_db.clamp(min, max),
+                    PanelSlider::AudioVolume => segment
+                        .volume_at(self.preview_or_playhead())
+                        .volume_db
+                        .clamp(min, max),
                     PanelSlider::AudioFadeIn => (segment.fade_in as f32).clamp(min, max),
                     _ => (segment.fade_out as f32).clamp(min, max),
                 }
@@ -3692,14 +3698,12 @@ impl EditorWindow {
                 .map_or(15., |segment| {
                     segment.fade_duration_override.unwrap_or(0.15) * 100.
                 }),
-            PanelSlider::MaskAmount => timeline
-                .mask_segments
-                .get(index)
-                .map_or(4., |segment| mask_effect_amount(segment) as f32),
-            PanelSlider::MaskDarkness => timeline
-                .mask_segments
-                .get(index)
-                .map_or(0., |segment| segment.darkness as f32),
+            PanelSlider::MaskAmount => timeline.mask_segments.get(index).map_or(4., |segment| {
+                mask_effect_amount(&segment.resolved_at(self.preview_or_playhead())) as f32
+            }),
+            PanelSlider::MaskDarkness => timeline.mask_segments.get(index).map_or(0., |segment| {
+                segment.pose_at(self.preview_or_playhead()).darkness as f32
+            }),
             PanelSlider::MaskFade => timeline
                 .mask_segments
                 .get(index)
@@ -3766,7 +3770,18 @@ impl EditorWindow {
                 })
             }
             PanelSlider::Shape(property) => {
+                let time = self.preview_or_playhead();
                 self.edit_shape_segment("shape-slider", index, window, cx, move |segment| {
+                    if property == crate::editor_shapes::ShapeProperty::Opacity {
+                        let mut pose = segment.pose_at(time);
+                        pose.opacity = value.clamp(0., 1.);
+                        segment.write_pose_at(
+                            time,
+                            pose,
+                            crate::editor_keyframes::KEYFRAME_TOLERANCE,
+                        );
+                        return true;
+                    }
                     property.write(segment, value)
                 })
             }
@@ -3807,7 +3822,8 @@ impl EditorWindow {
             | PanelSlider::TextShadow
             | PanelSlider::TextStroke
             | PanelSlider::TextGlow => {
-                self.edit_text_segment("text-slider", index, window, cx, move |segment| {
+                let time = self.preview_or_playhead();
+                let apply = move |segment: &mut TextSegment| {
                     match slider {
                         PanelSlider::TextLayoutTransition => {
                             segment.layout_transition = f64::from(value.clamp(0.1, 1.5))
@@ -3853,6 +3869,9 @@ impl EditorWindow {
                         _ => segment.shadow = value.clamp(0., 1.),
                     }
                     true
+                };
+                self.edit_text_segment("text-slider", index, window, cx, move |segment| {
+                    segment.edit_at(time, crate::editor_keyframes::KEYFRAME_TOLERANCE, apply)
                 })
             }
             // `setAnimationDuration` (`:3644-3656`): the legacy symmetric
@@ -3874,12 +3893,17 @@ impl EditorWindow {
                 })
             }
             PanelSlider::AudioVolume | PanelSlider::AudioFadeIn | PanelSlider::AudioFadeOut => {
+                let time = self.preview_or_playhead();
                 self.edit_audio_segment("audio-slider", index, window, cx, move |segment| {
                     let duration = (segment.end - segment.start).max(0.);
                     match slider {
-                        PanelSlider::AudioVolume => {
-                            segment.volume_db = value.clamp(MIN_VOLUME_DB, MAX_VOLUME_DB)
-                        }
+                        PanelSlider::AudioVolume => segment.write_volume_at(
+                            time,
+                            cap_project::VolumeLevel {
+                                volume_db: value.clamp(MIN_VOLUME_DB, MAX_VOLUME_DB),
+                            },
+                            crate::editor_keyframes::KEYFRAME_TOLERANCE,
+                        ),
                         // The *write* clamps to the real duration, not to the
                         // slider's `max(0.1, ..)` floor (`:4110`).
                         PanelSlider::AudioFadeIn => {
@@ -3899,18 +3923,30 @@ impl EditorWindow {
             // `setMaskEffectAmount` (`:4388-4393`): re-encode, and reset the
             // opacity and intensity keyframes the old model used.
             PanelSlider::MaskAmount => {
+                let time = self.preview_or_playhead();
                 self.edit_mask_segment("mask-amount", index, window, cx, move |segment| {
-                    let effect = mask_effect(segment);
-                    segment.pixelation = encode_mask_effect(effect, f64::from(value));
-                    segment.opacity = 1.;
                     segment.keyframes.intensity.clear();
-                    true
+                    segment.edit_at(
+                        time,
+                        crate::editor_keyframes::KEYFRAME_TOLERANCE,
+                        |segment| {
+                            let effect = mask_effect(segment);
+                            segment.pixelation = encode_mask_effect(effect, f64::from(value));
+                            segment.opacity = 1.;
+                            true
+                        },
+                    )
                 })
             }
             PanelSlider::MaskDarkness | PanelSlider::MaskFade => {
+                let time = self.preview_or_playhead();
                 self.edit_mask_segment("mask-slider", index, window, cx, move |segment| {
                     if slider == PanelSlider::MaskDarkness {
-                        segment.darkness = f64::from(value);
+                        segment.edit_at(
+                            time,
+                            crate::editor_keyframes::KEYFRAME_TOLERANCE,
+                            |segment| segment.darkness = f64::from(value),
+                        );
                     } else {
                         segment.fade_duration = f64::from(value);
                     }
@@ -5620,10 +5656,17 @@ impl EditorWindow {
                         cx,
                     ))
                     .when(include_size, |column| {
-                        column.child(self.slider_field(
+                        let field = self.slider_field(
                             tr::editor::panel::text_segment::font_size(),
                             SliderKey::Panel(PanelSlider::TextFontSize, index),
                             "int",
+                            cx,
+                        );
+                        column.child(self.keyframe_slider(
+                            TrackKind::Text,
+                            index,
+                            "size",
+                            field,
                             cx,
                         ))
                     }),
@@ -5921,12 +5964,15 @@ impl EditorWindow {
                                 "x100%",
                                 cx,
                             ))
-                            .child(self.slider_field(
-                                tr::editor::panel::opacity(),
-                                SliderKey::Panel(PanelSlider::TextOpacity, index),
-                                "x100%",
-                                cx,
-                            )),
+                            .child({
+                                let field = self.slider_field(
+                                    tr::editor::panel::opacity(),
+                                    SliderKey::Panel(PanelSlider::TextOpacity, index),
+                                    "x100%",
+                                    cx,
+                                );
+                                self.keyframe_slider(TrackKind::Text, index, "opacity", field, cx)
+                            }),
                     ),
                 )
                 .into_any_element(),
@@ -5934,6 +5980,7 @@ impl EditorWindow {
                 .flex()
                 .flex_col()
                 .gap(px(16.))
+                .child(self.render_keyframes(TrackKind::Text, index, cx))
                 .child(
                     ui::Field::section(&theme, tr::editor::panel::text_segment::animation())
                         .value(
@@ -6372,12 +6419,16 @@ impl EditorWindow {
             .flex_col()
             .gap(px(16.))
             .child(track_row)
-            .child(self.slider_field(
-                tr::editor::panel::audio::volume(),
-                SliderKey::Panel(PanelSlider::AudioVolume, index),
-                "volume",
-                cx,
-            ))
+            .child({
+                let field = self.slider_field(
+                    tr::editor::panel::audio::volume(),
+                    SliderKey::Panel(PanelSlider::AudioVolume, index),
+                    "volume",
+                    cx,
+                );
+                self.keyframe_slider(TrackKind::Audio, index, "volume", field, cx)
+            })
+            .child(self.render_keyframes(TrackKind::Audio, index, cx))
             .child(
                 div()
                     .flex()
@@ -6494,6 +6545,17 @@ impl EditorWindow {
                 segment.pixelation = encode_mask_effect(next, amount);
                 segment.opacity = 1.;
                 segment.keyframes.intensity.clear();
+                let offset = mask_effect_contract().blur_encoding_offset;
+                for key in &mut segment.motion {
+                    let stored = key.value.pixelation;
+                    let amount = if stored >= offset {
+                        stored - offset
+                    } else {
+                        stored
+                    };
+                    key.value.pixelation = encode_mask_effect(next, amount);
+                    key.value.opacity = 1.;
+                }
                 true
             });
         }));
@@ -6519,6 +6581,7 @@ impl EditorWindow {
             )
             .into_any_element()
         };
+        let strength = self.keyframe_slider(TrackKind::Mask, index, "strength", strength, cx);
 
         div()
             .flex()
@@ -6526,6 +6589,7 @@ impl EditorWindow {
             .gap(px(16.))
             .child(kind)
             .child(strength)
+            .child(self.render_keyframes(TrackKind::Mask, index, cx))
             .child(self.more_settings("mask", cx, move |this, cx| {
                 div()
                     .flex()
@@ -8917,6 +8981,7 @@ mod tests {
 
     fn mask(pixelation: f64) -> MaskSegment {
         MaskSegment {
+            motion: Vec::new(),
             start: 0.,
             end: 1.,
             track: 0,
@@ -9696,7 +9761,7 @@ impl EditorWindow {
                 })),
             );
         let image_slider = |this: &Self, property: ImageProperty, cx: &mut Context<Self>| {
-            this.slider_field(
+            let field = this.slider_field(
                 property.label(),
                 SliderKey::Panel(PanelSlider::Image(property), index),
                 if property == ImageProperty::Rotation {
@@ -9705,8 +9770,16 @@ impl EditorWindow {
                     "%"
                 },
                 cx,
-            )
-            .into_any_element()
+            );
+            match property {
+                ImageProperty::Rounding => field.into_any_element(),
+                ImageProperty::Opacity => {
+                    this.keyframe_slider(TrackKind::Image, index, "opacity", field, cx)
+                }
+                ImageProperty::Rotation => {
+                    this.keyframe_slider(TrackKind::Image, index, "rotation", field, cx)
+                }
+            }
         };
 
         div()
@@ -9731,7 +9804,7 @@ impl EditorWindow {
             .child(image_slider(self, ImageProperty::Opacity, cx))
             .child(image_slider(self, ImageProperty::Rounding, cx))
             .child(self.render_image_motion(index, cx))
-            .child(self.render_image_keyframes(index, cx))
+            .child(self.render_keyframes(TrackKind::Image, index, cx))
             .child(self.more_settings("image", cx, move |this, cx| {
                 let mut column = div().flex().flex_col().gap(px(14.)).child(image_slider(
                     this,

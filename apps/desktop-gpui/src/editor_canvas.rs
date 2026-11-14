@@ -746,7 +746,7 @@ impl EditorWindow {
                     continue;
                 }
                 if let Some(segment) = timeline.shape_segments.get(index) {
-                    rects.push(crate::editor_shapes::shape_bounds(segment));
+                    rects.push(crate::editor_shapes::shape_bounds(&segment.resolved_at(t)));
                 }
             }
             for (index, segment) in timeline.mask_segments.iter().enumerate() {
@@ -1129,7 +1129,10 @@ impl EditorWindow {
         self.snap_guides.clear();
         self.canvas_overlay_rect = None;
         if drag.moved {
-            if matches!(drag.element, CanvasSelection::Image(_)) {
+            if !matches!(
+                drag.element,
+                CanvasSelection::Display | CanvasSelection::Camera | CanvasSelection::Captions
+            ) {
                 self.rebuild_timeline();
             }
             self.schedule_save(window, cx);
@@ -1250,7 +1253,10 @@ impl EditorWindow {
             }
             CanvasSelection::Captions => self.write_caption_center(center, cx),
         }
-        if matches!(selected, CanvasSelection::Image(_)) {
+        if !matches!(
+            selected,
+            CanvasSelection::Display | CanvasSelection::Camera | CanvasSelection::Captions
+        ) {
             self.rebuild_timeline();
         }
         self.schedule_save(window, cx);
@@ -1374,11 +1380,23 @@ impl EditorWindow {
                     return Some(rect);
                 }
                 overlay_rect_from_center_size(
-                    self.project.timeline.as_ref()?.mask_segments.get(index)?,
+                    &self
+                        .project
+                        .timeline
+                        .as_ref()?
+                        .mask_segments
+                        .get(index)?
+                        .resolved_at(self.preview_or_playhead()),
                 )
             }
             CanvasSelection::Shape(index) => Some(crate::editor_shapes::shape_bounds(
-                self.project.timeline.as_ref()?.shape_segments.get(index)?,
+                &self
+                    .project
+                    .timeline
+                    .as_ref()?
+                    .shape_segments
+                    .get(index)?
+                    .resolved_at(self.preview_or_playhead()),
             )),
             CanvasSelection::Text(index) => {
                 if self
@@ -1389,7 +1407,14 @@ impl EditorWindow {
                 {
                     return Some(rect);
                 }
-                let segment = self.project.timeline.as_ref()?.text_segments.get(index)?;
+                let segment = self
+                    .project
+                    .timeline
+                    .as_ref()?
+                    .text_segments
+                    .get(index)?
+                    .resolved_at(self.preview_or_playhead());
+                let segment = segment.as_ref();
                 if segment.title_card.is_some() {
                     let layout = self.frame_layout.as_ref()?;
                     let bounds = cap_rendering::title_card_text_bounds(
@@ -1441,8 +1466,10 @@ impl EditorWindow {
                 let Some(segment) = timeline.mask_segments.get_mut(index) else {
                     return;
                 };
-                segment.center = center;
-                segment.size = size;
+                let mut pose = segment.pose_at(time);
+                pose.center = center;
+                pose.size = size;
+                segment.write_pose_at(time, pose, crate::editor_keyframes::KEYFRAME_TOLERANCE);
                 segment.keyframes.position.clear();
                 segment.keyframes.size.clear();
             }
@@ -1450,8 +1477,10 @@ impl EditorWindow {
                 let Some(segment) = timeline.text_segments.get_mut(index) else {
                     return;
                 };
-                segment.center = center;
-                segment.size = size;
+                let mut pose = segment.pose_at(time);
+                pose.center = center;
+                pose.size = size;
+                segment.write_pose_at(time, pose, crate::editor_keyframes::KEYFRAME_TOLERANCE);
                 if let Some(card) = &mut segment.title_card {
                     card.custom_text_layout = true;
                 }
@@ -1460,8 +1489,10 @@ impl EditorWindow {
                 let Some(segment) = timeline.shape_segments.get_mut(index) else {
                     return;
                 };
-                segment.from = XY::new(rect.x, rect.y);
-                segment.to = XY::new(rect.x + rect.w, rect.y + rect.h);
+                let mut pose = segment.pose_at(time);
+                pose.center = center;
+                pose.size = XY::new(rect.w.copysign(pose.size.x), rect.h.copysign(pose.size.y));
+                segment.write_pose_at(time, pose, crate::editor_keyframes::KEYFRAME_TOLERANCE);
             }
             _ => return,
         }

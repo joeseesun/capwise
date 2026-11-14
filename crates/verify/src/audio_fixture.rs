@@ -108,6 +108,7 @@ pub fn add_music(
 ) {
     let timeline = config.timeline.as_mut().expect("timeline");
     timeline.audio_segments.push(AudioTrackSegment {
+        volume_keyframes: Vec::new(),
         start,
         end,
         track: 0,

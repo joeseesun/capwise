@@ -203,6 +203,8 @@ pub fn prepare_shapes_into(
     visible.sort_by_key(|(index, segment)| (segment.track, *index));
 
     for (_, segment) in visible {
+        let segment = segment.resolved_at(frame_time);
+        let segment = segment.as_ref();
         let (enter_duration, exit_duration) = edge_durations(segment);
         let enter = sample_edge(
             segment.animation_in,
