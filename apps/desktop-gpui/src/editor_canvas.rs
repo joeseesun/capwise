@@ -959,7 +959,14 @@ impl EditorWindow {
         );
         // `if (!state.moved && Math.hypot(...) < 2) return` (`:299-309`): a
         // plain click must not write config.
-        if !drag.moved && delta.0.hypot(delta.1) < 2. {
+        // A press on a caption is usually a click to type, and a trackpad
+        // click wobbles a few pixels, so the caption waits for a real drag.
+        let threshold = if drag.element == CanvasSelection::Captions {
+            5.
+        } else {
+            2.
+        };
+        if !drag.moved && delta.0.hypot(delta.1) < threshold {
             return;
         }
         self.apply_canvas_drag(delta, event.modifiers.shift, canvas, window, cx);
