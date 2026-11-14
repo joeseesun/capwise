@@ -1665,9 +1665,9 @@ pub struct EditorWindow {
     pub(crate) canvas_selection: Option<crate::editor_canvas::CanvasSelection>,
     pub(crate) canvas_text_edit: Option<crate::editor_canvas::CanvasTextEdit>,
     pub(crate) caption_edit: Option<crate::caption_canvas::CaptionCanvasEdit>,
-    /// A press on a hand-placed caption: released without moving, it opens
-    /// the caption for typing.
-    pub(crate) caption_press: Option<(usize, Option<crate::caption_canvas::CaptionLine>)>,
+    /// The caption edit a press on the preview caption opened, still open to
+    /// become a drag instead.
+    pub(crate) caption_press: bool,
     /// `hovered` on `ElementBox` (`CanvasElementsOverlay.tsx:790`).
     pub(crate) hovered_canvas: Option<crate::editor_canvas::CanvasSelection>,
     /// The live display/camera drag.
@@ -2399,7 +2399,7 @@ impl EditorWindow {
             canvas_selection: None,
             canvas_text_edit: None,
             caption_edit: None,
-            caption_press: None,
+            caption_press: false,
             hovered_canvas: None,
             player_panel_bounds: ui::SliderTrack::default(),
             player_panel_hovered: false,

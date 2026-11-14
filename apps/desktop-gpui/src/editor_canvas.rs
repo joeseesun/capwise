@@ -815,13 +815,13 @@ impl EditorWindow {
                 captions.settings.display_mode == cap_project::CaptionDisplayMode::Bilingual
             });
             let line = line.filter(|_| bilingual);
-            // A press that moves drags the caption; one that does not opens
-            // it for typing on release.
-            if event.click_count > 1 {
-                self.begin_caption_edit(index, line, false, window, cx);
+            // A press opens the caption for typing at once. If it then moves,
+            // it becomes a drag and the untouched edit closes again.
+            self.begin_caption_edit(index, line, false, window, cx);
+            if event.click_count > 1 || self.caption_edit.is_none() {
                 return;
             }
-            self.caption_press = Some((index, line));
+            self.caption_press = true;
             self.canvas_selection = Some(element);
         }
         if let Some((kind, index)) = element.timeline_selection() {
@@ -968,6 +968,9 @@ impl EditorWindow {
         };
         if !drag.moved && delta.0.hypot(delta.1) < threshold {
             return;
+        }
+        if std::mem::take(&mut self.caption_press) {
+            self.cancel_caption_edit(window, cx);
         }
         self.apply_canvas_drag(delta, event.modifiers.shift, canvas, window, cx);
     }
@@ -1172,13 +1175,7 @@ impl EditorWindow {
         self.history.resume(&config);
         self.snap_guides.clear();
         self.canvas_overlay_rect = None;
-        if let Some((index, line)) = self.caption_press.take()
-            && drag.element == CanvasSelection::Captions
-            && !drag.moved
-        {
-            self.begin_caption_edit(index, line, false, window, cx);
-            return;
-        }
+        self.caption_press = false;
         if drag.moved {
             if !matches!(
                 drag.element,
