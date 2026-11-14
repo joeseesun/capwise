@@ -651,13 +651,6 @@ impl EditorWindow {
             .or_else(|| self.caption_drawn_rect())
     }
 
-    fn caption_manual(&self) -> bool {
-        self.frame_layout
-            .as_ref()
-            .and_then(|layout| layout.caption)
-            .is_some_and(|caption| caption.is_manual())
-    }
-
     fn show_captions(&self) -> bool {
         self.canvas_overlay_visible() && !self.caption_edit_open() && self.caption_rect().is_some()
     }
@@ -822,9 +815,9 @@ impl EditorWindow {
                 captions.settings.display_mode == cap_project::CaptionDisplayMode::Bilingual
             });
             let line = line.filter(|_| bilingual);
-            // A click types into the caption. Only a caption placed by hand
-            // also drags, so it opens on release when the press did not move.
-            if !self.caption_manual() || event.click_count > 1 {
+            // A press that moves drags the caption; one that does not opens
+            // it for typing on release.
+            if event.click_count > 1 {
                 self.begin_caption_edit(index, line, false, window, cx);
                 return;
             }
@@ -1354,6 +1347,7 @@ impl EditorWindow {
             return;
         }
         captions.settings.manual_position = Some(next);
+        captions.settings.position = "manual".to_string();
         self.project_changed_live(cx);
     }
 
@@ -2004,7 +1998,7 @@ impl EditorWindow {
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_)
             | CanvasSelection::Shape(_) => (true, true, None),
-            CanvasSelection::Captions => (self.caption_manual(), false, None),
+            CanvasSelection::Captions => (true, false, None),
         };
         let has_handles = element != CanvasSelection::Captions;
 
@@ -2030,7 +2024,7 @@ impl EditorWindow {
             .top(px(top))
             .w(px(width))
             .h(px(height))
-            .cursor(if element == CanvasSelection::Captions && !draggable {
+            .cursor(if element == CanvasSelection::Captions {
                 CursorStyle::IBeam
             } else if draggable {
                 CursorStyle::OpenHand

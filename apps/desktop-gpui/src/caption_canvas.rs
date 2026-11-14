@@ -992,7 +992,21 @@ impl EditorWindow {
             h: 0.12,
         });
         let pad = (font_size * 0.4).max(6.);
-        let width = (rect.w as f32 * cw + font_size * 2.)
+        let text_width = |input: &Entity<ui::TextInputState>, size: f32| {
+            input
+                .read(cx)
+                .text()
+                .chars()
+                .map(|ch| if ch.is_ascii() { 0.6 } else { 1.05 })
+                .sum::<f32>()
+                * size
+        };
+        let content = edit
+            .translation
+            .as_ref()
+            .map_or(0., |line| text_width(&line.input, font_size * 0.8));
+        let width = (rect.w as f32 * cw)
+            .max(text_width(&edit.source, font_size).max(content) + pad * 2. + font_size)
             .max(font_size * 8.)
             .min(cw * 0.96);
         let left = (rect.x as f32 * cw + rect.w as f32 * cw / 2. - width / 2.)
