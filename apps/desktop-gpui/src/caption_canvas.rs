@@ -1,5 +1,5 @@
-//! Editing a caption where it is drawn: double-click the caption on the
-//! preview (or press Return with a caption selected) and type over it.
+//! Editing a caption where it is drawn: click the caption on the preview (or
+//! press Return with a caption selected) and type over it.
 //!
 //! The renderer keeps laying the caption out but skips drawing it while the
 //! box is open, so the box sits exactly where the caption is without doubling
@@ -933,15 +933,15 @@ impl EditorWindow {
         (rect.w > 0. && rect.h > 0.).then_some(rect)
     }
 
-    /// A double-click on the caption while the video plays: stop there and
-    /// edit the caption that was showing.
-    pub(crate) fn caption_double_click_while_playing(
+    /// A click on the caption while the video plays: stop there and edit the
+    /// caption that was showing.
+    pub(crate) fn caption_click_while_playing(
         &mut self,
         event: &MouseDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if event.click_count != 2 || !self.playing {
+        if !self.playing {
             return false;
         }
         let (Some(rect), Some(frame)) = (self.caption_drawn_rect(), self.canvas_bounds()) else {

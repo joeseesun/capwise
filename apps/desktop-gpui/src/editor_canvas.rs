@@ -806,38 +806,30 @@ impl EditorWindow {
                 return;
             };
             self.assistant.open = false;
-            if event.click_count == 2 {
-                let line = self.caption_rect().and_then(|rect| {
-                    let frame = self.canvas_bounds()?;
-                    let y = f64::from(
-                        f32::from(event.position.y - frame.origin.y)
-                            / f32::from(frame.size.height).max(1.),
-                    );
-                    Some(if y > rect.y + rect.h * 0.6 {
-                        crate::caption_canvas::CaptionLine::Translation
-                    } else {
-                        crate::caption_canvas::CaptionLine::Source
-                    })
-                });
-                let bilingual = self.project.captions.as_ref().is_some_and(|captions| {
-                    captions.settings.display_mode == cap_project::CaptionDisplayMode::Bilingual
-                });
-                self.begin_caption_edit(index, line.filter(|_| bilingual), false, window, cx);
+            let line = self.caption_rect().and_then(|rect| {
+                let frame = self.canvas_bounds()?;
+                let y = f64::from(
+                    f32::from(event.position.y - frame.origin.y)
+                        / f32::from(frame.size.height).max(1.),
+                );
+                Some(if y > rect.y + rect.h * 0.6 {
+                    crate::caption_canvas::CaptionLine::Translation
+                } else {
+                    crate::caption_canvas::CaptionLine::Source
+                })
+            });
+            let bilingual = self.project.captions.as_ref().is_some_and(|captions| {
+                captions.settings.display_mode == cap_project::CaptionDisplayMode::Bilingual
+            });
+            let line = line.filter(|_| bilingual);
+            // A click types into the caption. Only a caption placed by hand
+            // also drags, so it opens on release when the press did not move.
+            if !self.caption_manual() || event.click_count > 1 {
+                self.begin_caption_edit(index, line, false, window, cx);
                 return;
             }
-            self.set_selection_with_scroll(
-                Some(crate::editor_edits::Selection::single(
-                    TrackKind::Caption,
-                    index,
-                )),
-                true,
-                cx,
-            );
+            self.caption_press = Some((index, line));
             self.canvas_selection = Some(element);
-            if !self.caption_manual() {
-                cx.notify();
-                return;
-            }
         }
         if let Some((kind, index)) = element.timeline_selection() {
             self.canvas_selection = Some(element);
@@ -1180,6 +1172,13 @@ impl EditorWindow {
         self.history.resume(&config);
         self.snap_guides.clear();
         self.canvas_overlay_rect = None;
+        if let Some((index, line)) = self.caption_press.take()
+            && drag.element == CanvasSelection::Captions
+            && !drag.moved
+        {
+            self.begin_caption_edit(index, line, false, window, cx);
+            return;
+        }
         if drag.moved {
             if !matches!(
                 drag.element,

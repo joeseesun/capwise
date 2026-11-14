@@ -152,7 +152,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Camera size follows the zoom — drag to move",
         ),
         (tr::editor::canvas::captions(), "Captions"),
-        (tr::editor::canvas::caption_hint(), "Double-click to edit"),
+        (tr::editor::canvas::caption_hint(), "Click to edit"),
         (tr::editor::canvas::caption_translation(), "Translation"),
         (tr::editor::canvas::edit_zoom(), "Edit zoom"),
         (tr::editor::canvas::image(), "Image"),
