@@ -5453,13 +5453,12 @@ impl EditorWindow {
         } else {
             None
         };
-        let keyframe_press = (kind == TrackKind::Image
-            && matches!(hit, Hit::Body { .. })
+        let keyframe_press = (matches!(hit, Hit::Body { .. })
             && self
                 .selection
                 .as_ref()
                 .is_some_and(|selection| selection.contains(kind, index)))
-        .then(|| self.image_keyframe_hit(index, x, secs_per_pixel))
+        .then(|| self.keyframe_hit(kind, index, x, secs_per_pixel))
         .flatten();
         let press_time = keyframe_press.map_or(press_time, |(_, time)| time);
         let kind_of_drag = match (kind, hit) {
@@ -6167,12 +6166,10 @@ impl EditorWindow {
                 let (target, engaged) =
                     self.snap_dragged_time(time + delta, secs_per_pixel, snap_disabled);
                 self.drag_snap_time = engaged;
-                let index = drag.index;
+                let (track, index) = (drag.track, drag.index);
                 self.edit_live(
                     |timeline| {
-                        timeline
-                            .image_segments
-                            .get_mut(index)
+                        crate::editor_keyframes::keyframed_mut(timeline, track, index)
                             .and_then(|segment| {
                                 segment.retime_keyframe(
                                     key,
@@ -15993,6 +15990,7 @@ mod tests {
     #[test]
     fn non_clip_split_preview_respects_track_limits_in_scrolled_timelines() {
         let segment = timeline::Segment {
+            keyframes: Default::default(),
             start: 10.,
             end: 14.,
             lane: 0,

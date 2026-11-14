@@ -1,11 +1,13 @@
-use cap_project::{ImageSegment, KeyframeInterpolation, LayerPose};
+use cap_project::{
+    ImageSegment, KeyframeInterpolation, Keyframed, LayerPose, TimelineConfiguration,
+};
 use gpui::{
     AnyElement, Context, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
 use crate::{
-    editor_timeline as timeline,
+    editor_timeline::{self as timeline, TrackKind},
     editor_window::{EDITOR_PREVIEW_FPS, EditorWindow},
     i18n::tr,
     ui,
@@ -23,37 +25,92 @@ const INTERPOLATIONS: [KeyframeInterpolation; 3] = [
     KeyframeInterpolation::Hold,
 ];
 
+pub(crate) fn keyframed(
+    timeline: &TimelineConfiguration,
+    kind: TrackKind,
+    index: usize,
+) -> Option<&dyn Keyframed> {
+    Some(match kind {
+        TrackKind::Image => timeline.image_segments.get(index)?,
+        TrackKind::Text => timeline
+            .text_segments
+            .get(index)
+            .filter(|segment| segment.title_card.is_none())?,
+        TrackKind::Shape => timeline.shape_segments.get(index)?,
+        TrackKind::Mask => timeline.mask_segments.get(index)?,
+        TrackKind::Audio => timeline.audio_segments.get(index)?,
+        _ => return None,
+    })
+}
+
+pub(crate) fn keyframed_mut(
+    timeline: &mut TimelineConfiguration,
+    kind: TrackKind,
+    index: usize,
+) -> Option<&mut dyn Keyframed> {
+    Some(match kind {
+        TrackKind::Image => timeline.image_segments.get_mut(index)?,
+        TrackKind::Text => timeline
+            .text_segments
+            .get_mut(index)
+            .filter(|segment| segment.title_card.is_none())?,
+        TrackKind::Shape => timeline.shape_segments.get_mut(index)?,
+        TrackKind::Mask => timeline.mask_segments.get_mut(index)?,
+        TrackKind::Audio => timeline.audio_segments.get_mut(index)?,
+        _ => return None,
+    })
+}
+
 /// The keyframe whose span covers `time`: the one at or before it, kept off
 /// the last keyframe, which has no span after it to shape.
-fn span_keyframe(segment: &ImageSegment, time: f64) -> Option<usize> {
-    let count = segment.keyframes.len();
+fn span_keyframe(segment: &dyn Keyframed, time: f64) -> Option<usize> {
+    let times = segment.keyframe_times();
+    let count = times.len();
     if count < 2 {
         return None;
     }
-    let local = time - segment.start;
+    let local = time - segment.keyframe_span().0;
     let mut order: Vec<usize> = (0..count).collect();
-    order.sort_by(|a, b| {
-        segment.keyframes[*a]
-            .time
-            .total_cmp(&segment.keyframes[*b].time)
-    });
+    order.sort_by(|a, b| times[*a].total_cmp(&times[*b]));
     let position = order
         .iter()
-        .rposition(|index| segment.keyframes[*index].time <= local + KEYFRAME_TOLERANCE)
+        .rposition(|index| times[*index] <= local + KEYFRAME_TOLERANCE)
         .unwrap_or(0)
         .min(count - 2);
     Some(order[position])
 }
 
-/// The nearest time inside the layer that a keyframe can sit on.
-fn time_inside(segment: &ImageSegment, time: f64) -> f64 {
-    let last = (segment.end - FRAME).max(segment.start);
-    time.clamp(segment.start, last)
+/// The nearest time inside the segment that a keyframe can sit on.
+fn time_inside(segment: &dyn Keyframed, time: f64) -> f64 {
+    let (start, end) = segment.keyframe_span();
+    time.clamp(start, (end - FRAME).max(start))
 }
 
 impl EditorWindow {
     fn image_segment(&self, index: usize) -> Option<&ImageSegment> {
         self.project.timeline.as_ref()?.image_segments.get(index)
+    }
+
+    fn keyframed(&self, kind: TrackKind, index: usize) -> Option<&dyn Keyframed> {
+        keyframed(self.project.timeline.as_ref()?, kind, index)
+    }
+
+    fn edit_keyframed(
+        &mut self,
+        reason: &'static str,
+        kind: TrackKind,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut dyn Keyframed) -> bool,
+    ) {
+        self.edit_project(reason, window, cx, move |project| {
+            project
+                .timeline
+                .as_mut()
+                .and_then(|timeline| keyframed_mut(timeline, kind, index))
+                .is_some_and(change)
+        });
     }
 
     pub(crate) fn image_pose(&self, index: usize) -> Option<LayerPose> {
@@ -65,32 +122,40 @@ impl EditorWindow {
 
     /// The keyframe diamond under a press at content-column `x`, as its index
     /// and its timeline time.
-    pub(crate) fn image_keyframe_hit(
+    pub(crate) fn keyframe_hit(
         &self,
+        kind: TrackKind,
         index: usize,
         x: f64,
         secs_per_pixel: f64,
     ) -> Option<(usize, f64)> {
-        let segment = self.image_segment(index)?;
-        let duration = segment.end - segment.start;
-        let left = (segment.start - self.view.transform.position) / secs_per_pixel;
+        let segment = self.keyframed(kind, index)?;
+        let (start, end) = segment.keyframe_span();
+        let duration = end - start;
+        let left = (start - self.view.transform.position) / secs_per_pixel;
         let width = duration / secs_per_pixel;
         segment
-            .keyframes
-            .iter()
+            .keyframe_times()
+            .into_iter()
             .enumerate()
-            .filter(|(_, key)| (-1e-6..=duration + 1e-6).contains(&key.time))
-            .map(|(key_index, key)| {
-                let mark = left + timeline::keyframe_mark_x(key.time, secs_per_pixel, width);
-                (key_index, segment.start + key.time, (mark - x).abs())
+            .filter(|(_, time)| (-1e-6..=duration + 1e-6).contains(time))
+            .map(|(key_index, time)| {
+                let mark = left + timeline::keyframe_mark_x(time, secs_per_pixel, width);
+                (key_index, start + time, (mark - x).abs())
             })
             .filter(|(_, _, distance)| *distance <= MARK_HIT_PX)
             .min_by(|a, b| a.2.total_cmp(&b.2))
             .map(|(key_index, time, _)| (key_index, time))
     }
 
-    fn toggle_image_keyframe(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(segment) = self.image_segment(index) else {
+    fn toggle_keyframe(
+        &mut self,
+        kind: TrackKind,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(segment) = self.keyframed(kind, index) else {
             return;
         };
         let playhead = self.playhead_time();
@@ -98,8 +163,9 @@ impl EditorWindow {
         if (time - playhead).abs() > KEYFRAME_TOLERANCE {
             self.seek_to_time(time, cx);
         }
-        self.edit_image_segment(
-            "image-keyframe",
+        self.edit_keyframed(
+            "keyframe",
+            kind,
             index,
             window,
             cx,
@@ -110,9 +176,15 @@ impl EditorWindow {
         );
     }
 
-    fn jump_image_keyframe(&mut self, index: usize, forward: bool, cx: &mut Context<Self>) {
+    fn jump_keyframe(
+        &mut self,
+        kind: TrackKind,
+        index: usize,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) {
         let playhead = self.playhead_time();
-        if let Some(time) = self.image_segment(index).and_then(|segment| {
+        if let Some(time) = self.keyframed(kind, index).and_then(|segment| {
             segment
                 .neighbouring_keyframe(playhead, KEYFRAME_TOLERANCE, forward)
                 .map(|time| time_inside(segment, time))
@@ -121,11 +193,13 @@ impl EditorWindow {
         }
     }
 
-    /// The one picture layer the keyframe button and shortcuts act on.
-    pub(crate) fn keyframe_target(&self) -> Option<usize> {
+    /// The one segment the keyframe button and shortcuts act on.
+    pub(crate) fn keyframe_target(&self) -> Option<(TrackKind, usize)> {
         let selection = self.selection.as_ref()?;
-        match (selection.track, selection.indices.as_slice()) {
-            (timeline::TrackKind::Image, [index]) => self.image_segment(*index).map(|_| *index),
+        match selection.indices.as_slice() {
+            [index] => self
+                .keyframed(selection.track, *index)
+                .map(|_| (selection.track, *index)),
             _ => None,
         }
     }
@@ -137,13 +211,13 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(index) = self.keyframe_target() else {
+        let Some((kind, index)) = self.keyframe_target() else {
             return false;
         };
         match key {
-            "k" => self.toggle_image_keyframe(index, window, cx),
-            "[" => self.jump_image_keyframe(index, false, cx),
-            "]" => self.jump_image_keyframe(index, true, cx),
+            "k" => self.toggle_keyframe(kind, index, window, cx),
+            "[" => self.jump_keyframe(kind, index, false, cx),
+            "]" => self.jump_keyframe(kind, index, true, cx),
             _ => return false,
         }
         true
@@ -157,7 +231,7 @@ impl EditorWindow {
         let theme = self.theme;
         let target = self.keyframe_target();
         let on_keyframe = target
-            .and_then(|index| self.image_segment(index))
+            .and_then(|(kind, index)| self.keyframed(kind, index))
             .is_some_and(|segment| {
                 segment
                     .keyframe_index_at(self.playhead_time(), KEYFRAME_TOLERANCE)
@@ -186,8 +260,8 @@ impl EditorWindow {
         .radius(px(7.))
         .disabled(target.is_none() || !self.project_ready())
         .on_click(cx.listener(|this, _, window, cx| {
-            if let Some(index) = this.keyframe_target() {
-                this.toggle_image_keyframe(index, window, cx);
+            if let Some((kind, index)) = this.keyframe_target() {
+                this.toggle_keyframe(kind, index, window, cx);
             }
         }));
         if !compact {
@@ -212,23 +286,26 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    pub(crate) fn render_image_keyframes(
+    pub(crate) fn render_keyframes(
         &self,
+        kind: TrackKind,
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(segment) = self.image_segment(index) else {
+        let Some(segment) = self.keyframed(kind, index) else {
             return div().into_any_element();
         };
+        let all_times = segment.keyframe_times();
+        let (segment_start, _) = segment.keyframe_span();
         let theme = self.theme;
         let playhead = self.playhead_time();
-        let mut times: Vec<f64> = segment.visible_keyframe_times().collect();
+        let mut times = segment.visible_keyframe_times();
         times.sort_by(f64::total_cmp);
-        let local = playhead - segment.start;
+        let local = playhead - segment_start;
         let current = times
             .iter()
             .position(|time| (time - local).abs() <= KEYFRAME_TOLERANCE);
-        let animated = !segment.keyframes.is_empty();
+        let animated = !all_times.is_empty();
         let has_previous = segment
             .neighbouring_keyframe(playhead, KEYFRAME_TOLERANCE, false)
             .is_some();
@@ -239,7 +316,7 @@ impl EditorWindow {
         let span_label = span.map(|key| {
             let from = times
                 .iter()
-                .position(|time| (time - segment.keyframes[key].time).abs() < 1e-9)
+                .position(|time| (time - all_times[key]).abs() < 1e-9)
                 .map_or(1, |position| position + 1);
             SharedString::from(format!(
                 "{} {from} → {}",
@@ -247,12 +324,12 @@ impl EditorWindow {
                 from + 1
             ))
         });
-        let interpolation = span.map(|key| segment.keyframes[key].interpolation);
+        let interpolation = span.and_then(|key| segment.keyframe_interpolation(key));
 
         let step = |forward: bool, enabled: bool, cx: &mut Context<Self>| {
             let button = ui::EditorButton::plain(
                 &theme,
-                SharedString::from(format!("image-keyframe-step-{index}-{forward}")),
+                SharedString::from(format!("keyframe-{kind:?}-step-{index}-{forward}")),
             )
             .width(px(28.))
             .left_icon(if forward {
@@ -263,11 +340,11 @@ impl EditorWindow {
             .icon_size(px(14.))
             .disabled(!enabled)
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.jump_image_keyframe(index, forward, cx);
+                this.jump_keyframe(kind, index, forward, cx);
             }));
             div()
                 .id(SharedString::from(format!(
-                    "image-keyframe-step-tip-{index}-{forward}"
+                    "keyframe-{kind:?}-step-tip-{index}-{forward}"
                 )))
                 .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                 .tooltip(move |_, cx| {
@@ -287,7 +364,7 @@ impl EditorWindow {
         let on_keyframe = current.is_some();
         let toggle = div()
             .id(SharedString::from(format!(
-                "image-keyframe-toggle-tip-{index}"
+                "keyframe-{kind:?}-toggle-tip-{index}"
             )))
             .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
             .tooltip(move |_, cx| {
@@ -305,7 +382,7 @@ impl EditorWindow {
             .child(
                 ui::EditorButton::plain(
                     &theme,
-                    SharedString::from(format!("image-keyframe-toggle-{index}")),
+                    SharedString::from(format!("keyframe-{kind:?}-toggle-{index}")),
                 )
                 .choice(&theme)
                 .pressed(on_keyframe)
@@ -317,7 +394,7 @@ impl EditorWindow {
                 })
                 .icon_size(px(14.))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.toggle_image_keyframe(index, window, cx);
+                    this.toggle_keyframe(kind, index, window, cx);
                 })),
             );
         let count = SharedString::from(match current {
@@ -347,14 +424,15 @@ impl EditorWindow {
                 row.child(
                     ui::EditorButton::plain(
                         &theme,
-                        SharedString::from(format!("image-keyframe-clear-{index}")),
+                        SharedString::from(format!("keyframe-{kind:?}-clear-{index}")),
                     )
                     .text_size(px(12.))
                     .label(tr::editor::panel::keyframes::clear())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let time = this.preview_or_playhead();
-                        this.edit_image_segment(
-                            "image-keyframes-clear",
+                        this.edit_keyframed(
+                            "keyframes-clear",
+                            kind,
                             index,
                             window,
                             cx,
@@ -382,7 +460,7 @@ impl EditorWindow {
                         ui::Field::inline(&theme, label).child(
                             ui::SegmentedControl::editor(
                                 &theme,
-                                SharedString::from(format!("image-keyframe-motion-{index}")),
+                                SharedString::from(format!("keyframe-{kind:?}-motion-{index}")),
                                 INTERPOLATIONS
                                     .iter()
                                     .map(|value| {
@@ -408,8 +486,9 @@ impl EditorWindow {
                                     let Some(value) = INTERPOLATIONS.get(*choice).copied() else {
                                         return;
                                     };
-                                    this.edit_image_segment(
-                                        "image-keyframe-motion",
+                                    this.edit_keyframed(
+                                        "keyframe-motion",
+                                        kind,
                                         index,
                                         window,
                                         cx,
@@ -459,5 +538,32 @@ mod tests {
         assert_eq!(time_inside(&layer, 2.0), 10.0);
         assert_eq!(time_inside(&layer, 12.0), 12.0);
         assert!(layer.is_active_at(time_inside(&layer, 99.0)));
+    }
+
+    #[test]
+    fn every_keyframed_kind_resolves_and_other_tracks_do_not() {
+        let mut timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [], "zoomSegments": []
+        }))
+        .unwrap();
+        timeline.image_segments.push(layer(&[]));
+        timeline
+            .text_segments
+            .push(cap_project::default_text_segment(0.0, 1.0, 0));
+        timeline.shape_segments.push(Default::default());
+        timeline
+            .mask_segments
+            .push(cap_project::default_mask_segment(0.0, 1.0, 0));
+        for kind in [
+            TrackKind::Image,
+            TrackKind::Text,
+            TrackKind::Shape,
+            TrackKind::Mask,
+        ] {
+            assert!(keyframed(&timeline, kind, 0).is_some(), "{kind:?}");
+            assert!(keyframed_mut(&mut timeline, kind, 0).is_some());
+            assert!(keyframed(&timeline, kind, 1).is_none());
+        }
+        assert!(keyframed(&timeline, TrackKind::Zoom, 0).is_none());
     }
 }
