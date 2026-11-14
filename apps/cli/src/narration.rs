@@ -229,6 +229,7 @@ impl NarrationArgs {
             enabled: true,
             trim_start: 0.0,
             volume_db: 0.0,
+            volume_keyframes: Vec::new(),
             ducking: false,
             fade_in: 0.0,
             fade_out: 0.0,
