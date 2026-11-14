@@ -1009,11 +1009,11 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::panel::keyframes::clear(), "Clear keyframes"),
         (
             tr::editor::panel::keyframes::hint_empty(),
-            "Add a keyframe, move the playhead, then move or restyle the picture. It animates between the two.",
+            "Add a keyframe, move the playhead, then make a change. It animates between the two.",
         ),
         (
             tr::editor::panel::keyframes::select_layer(),
-            "Select a picture or sticker to add a keyframe",
+            "Select a picture, text, shape, mask or music clip to add a keyframe",
         ),
         (tr::editor::panel::keyframes::transition(), "Motion"),
         (tr::editor::panel::keyframes::smooth(), "Smooth"),

@@ -26,7 +26,10 @@ impl DuckingEnvelope {
             || !project.audio.mic_volume_db.is_finite()
             || project.audio.mic_volume_db <= -30.
             || !timeline.audio_segments.iter().any(|segment| {
-                segment.enabled && segment.ducking && segment.volume_db > super::MUSIC_SILENCE_DB
+                segment.enabled
+                    && segment.ducking
+                    && (segment.volume_db > super::MUSIC_SILENCE_DB
+                        || !segment.volume_keyframes.is_empty())
             })
             || !data
                 .iter()

@@ -99,6 +99,7 @@ async fn fixture_with(with_overlay: bool, with_mask: bool) -> Fixture {
     if with_mask {
         project.background.padding = 0.0;
         timeline.mask_segments.push(MaskSegment {
+            motion: Vec::new(),
             start: 0.0,
             end: 10.0,
             track: 0,

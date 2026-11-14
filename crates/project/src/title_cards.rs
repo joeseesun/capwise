@@ -219,6 +219,7 @@ pub struct TitleCardChange {
 impl TextSegment {
     pub fn new_title_card(role: TitleCardRole, content: impl Into<String>) -> Self {
         Self {
+            keyframes: Vec::new(),
             start: 0.0,
             end: if role == TitleCardRole::Intro {
                 1.0

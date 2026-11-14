@@ -40,6 +40,7 @@ mod playback_follow;
 
 pub use playback_follow::PlaybackFollow;
 
+use cap_project::Keyframed as _;
 use cap_project::{
     CaptionTrackSegment, MaskKind, OverlayTrack, OverlayTrackKind, ProjectConfiguration, SceneMode,
     ShapeKind, TextLayout, TimelineConfiguration, ZoomMode,
@@ -1263,6 +1264,8 @@ pub struct Segment {
     /// Which lane (mask / text / audio are multi-lane, `TL/index.tsx:224-227`).
     pub lane: u32,
     pub detail: SegmentDetail,
+    /// Keyframe times inside the segment, in seconds from its start.
+    pub keyframes: Arc<[f64]>,
 }
 
 /// Every string here is a [`SharedString`] and the waveform tables are
@@ -1278,8 +1281,6 @@ pub enum SegmentDetail {
     Image {
         name: SharedString,
         enabled: bool,
-        /// Keyframe times inside the layer, in seconds from its start.
-        keyframes: Arc<[f64]>,
     },
     /// `TL/ClipTrack.tsx`. `start`/`end` above are the **output-time** box;
     /// these carry the recording-domain numbers the label reads.
@@ -1532,6 +1533,7 @@ impl TimelineModel {
             .zoom_segments
             .iter()
             .map(|segment| Segment {
+                keyframes: Default::default(),
                 start: segment.start,
                 end: segment.end,
                 lane: 0,
@@ -1546,6 +1548,7 @@ impl TimelineModel {
             .scene_segments
             .iter()
             .map(|segment| Segment {
+                keyframes: Default::default(),
                 start: segment.start,
                 end: segment.end,
                 lane: 0,
@@ -1557,6 +1560,7 @@ impl TimelineModel {
             .camera3d_segments
             .iter()
             .map(|segment| Segment {
+                keyframes: Default::default(),
                 start: segment.start,
                 end: segment.end,
                 lane: 0,
@@ -1570,6 +1574,7 @@ impl TimelineModel {
             .text_segments
             .iter()
             .map(|segment| Segment {
+                keyframes: segment.visible_keyframe_times().into(),
                 start: segment.start,
                 end: segment.end,
                 lane: segment.track,
@@ -1595,6 +1600,7 @@ impl TimelineModel {
             .shape_segments
             .iter()
             .map(|segment| Segment {
+                keyframes: segment.visible_keyframe_times().into(),
                 start: segment.start,
                 end: segment.end,
                 lane: segment.track,
@@ -1610,6 +1616,7 @@ impl TimelineModel {
             .mask_segments
             .iter()
             .map(|segment| Segment {
+                keyframes: segment.visible_keyframe_times().into(),
                 start: segment.start,
                 end: segment.end,
                 lane: segment.track,
@@ -1626,6 +1633,7 @@ impl TimelineModel {
             .audio_segments
             .iter()
             .map(|segment| Segment {
+                keyframes: segment.visible_keyframe_times().into(),
                 start: segment.start,
                 end: segment.end,
                 lane: segment.track,
@@ -1654,6 +1662,7 @@ impl TimelineModel {
             .caption_segments
             .iter()
             .map(|segment: &CaptionTrackSegment| Segment {
+                keyframes: Default::default(),
                 start: segment.start,
                 end: segment.end.min(total_duration),
                 lane: 0,
@@ -1671,6 +1680,7 @@ impl TimelineModel {
             .keyboard_segments
             .iter()
             .map(|segment| Segment {
+                keyframes: Default::default(),
                 start: segment.start,
                 end: segment.end.min(total_duration),
                 lane: 0,
@@ -1688,6 +1698,7 @@ impl TimelineModel {
             .style_segments
             .iter()
             .map(|segment| Segment {
+                keyframes: Default::default(),
                 start: segment.start,
                 end: segment.end,
                 lane: segment.track,
@@ -1707,8 +1718,8 @@ impl TimelineModel {
                 detail: SegmentDetail::Image {
                     name: segment.name.clone().into(),
                     enabled: segment.enabled,
-                    keyframes: segment.visible_keyframe_times().collect(),
                 },
+                keyframes: segment.visible_keyframe_times().into(),
             })
             .collect();
         let mut model = Self {
@@ -1901,6 +1912,7 @@ fn clip_rows(
                 .filter(|(hold_start, hold_end)| hold_end > hold_start)
                 .collect();
             Segment {
+                keyframes: Default::default(),
                 start,
                 end,
                 lane: 0,
@@ -2035,6 +2047,9 @@ pub struct SegmentUi<'a> {
     /// Which end of the selected 3D shot the panel is editing, for the pose
     /// dots on its box.
     pub camera3d_editing_end: bool,
+    /// The keyframe picked on the timeline: its track, segment and time in
+    /// seconds from that segment's start.
+    pub selected_keyframe: Option<(TrackKind, usize, f64)>,
 }
 
 impl SegmentUi<'_> {
@@ -2483,6 +2498,9 @@ fn render_track_content(
                 ui.is_hovered(*kind, row.lane, index),
                 ui.split_mode,
                 ui.camera3d_editing_end,
+                ui.selected_keyframe
+                    .filter(|(track, segment, _)| (*track, *segment) == (*kind, index))
+                    .map(|(_, _, time)| time),
             ));
         }
     }
@@ -2918,6 +2936,7 @@ fn render_segment(
     hovered: bool,
     split_mode: bool,
     camera3d_editing_end: bool,
+    selected_keyframe: Option<f64>,
 ) -> AnyElement {
     let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
         muted_clip_color(theme)
@@ -3083,7 +3102,8 @@ fn render_segment(
         }
     }
 
-    if let SegmentDetail::Image { keyframes, .. } = &segment.detail {
+    if !segment.keyframes.is_empty() {
+        let keyframes = &segment.keyframes;
         let tint = if selected {
             Hsla::from(theme.editor.accent)
         } else {
@@ -3091,14 +3111,26 @@ fn render_segment(
         };
         for time in keyframes.iter() {
             let center = keyframe_mark_x(*time, secs_per_pixel, f64::from(width)) as f32;
+            let picked = selected_keyframe.is_some_and(|picked| (picked - time).abs() < 1e-6);
+            let size = if picked {
+                KEYFRAME_MARK + 4.
+            } else if hovered || selected {
+                KEYFRAME_MARK + 2.
+            } else {
+                KEYFRAME_MARK
+            };
             fill = fill.child(
                 svg()
                     .path("icons/keyframe-filled.svg")
                     .absolute()
-                    .left(px(center - KEYFRAME_MARK / 2.))
-                    .bottom(px(KEYFRAME_MARK_INSET))
-                    .size(px(KEYFRAME_MARK))
-                    .text_color(tint),
+                    .left(px(center - size / 2.))
+                    .bottom(px(KEYFRAME_MARK_INSET - (size - KEYFRAME_MARK) / 2.))
+                    .size(px(size))
+                    .text_color(if picked {
+                        Hsla::from(theme.editor.text_1)
+                    } else {
+                        tint
+                    }),
             );
         }
     }
@@ -4651,6 +4683,7 @@ mod tests {
     #[test]
     fn lane_counts_follow_the_highest_used_lane() {
         let segment = |lane: u32| Segment {
+            keyframes: Default::default(),
             start: 0.,
             end: 1.,
             lane,
@@ -4995,6 +5028,7 @@ mod tests {
     #[test]
     fn the_zoom_ghost_finds_the_gap_under_the_pointer() {
         let zoom = |start: f64, end: f64| Segment {
+            keyframes: Default::default(),
             start,
             end,
             lane: 0,
@@ -5048,6 +5082,7 @@ mod tests {
     fn zoom_creation_respects_gap_edges_at_zoomed_out_scales() {
         let model = TimelineModel {
             zoom: vec![Segment {
+                keyframes: Default::default(),
                 start: 20.0,
                 end: 24.0,
                 lane: 0,
@@ -5067,6 +5102,7 @@ mod tests {
     fn zoom_creation_requires_a_full_gap_inside_the_timeline() {
         let model = TimelineModel {
             zoom: vec![Segment {
+                keyframes: Default::default(),
                 start: 2.0,
                 end: 8.0,
                 lane: 0,
@@ -5096,6 +5132,7 @@ mod tests {
     #[test]
     fn scene_preview_and_creation_share_non_overlapping_placement() {
         let scene = |start, end| Segment {
+            keyframes: Default::default(),
             start,
             end,
             lane: 0,

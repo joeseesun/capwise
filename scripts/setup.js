@@ -177,25 +177,40 @@ async function main() {
 			downloadedFfmpeg ||
 			(await missingFfmpegLibraries(ffmpegLibDir, "", "lib")).length > 0
 		) {
-			await exec(
-				`Expand-Archive -Path "${ffmpegZipPath}" -DestinationPath "${targetDir}" -Force`,
-				{ shell: "powershell.exe" },
+			const extractionDir = await fs.mkdtemp(
+				path.join(targetDir, "ffmpeg-extract-"),
 			);
-			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
-			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
+			try {
+				await extractWindowsArchive(ffmpegZipPath, extractionDir);
+				const extractedFfmpeg = path.join(extractionDir, FFMPEG_ZIP_NAME);
+				const missingLibraries = await missingFfmpegLibraries(
+					path.join(extractedFfmpeg, "lib"),
+					"",
+					"lib",
+				);
+				if (missingLibraries.length > 0) {
+					throw new Error(
+						`FFmpeg archive is missing libraries: ${missingLibraries.join(", ")}`,
+					);
+				}
+				await fs.rm(ffmpegDir, { recursive: true, force: true });
+				await fs.rename(extractedFfmpeg, ffmpegDir);
+			} finally {
+				await fs.rm(extractionDir, { recursive: true, force: true });
+			}
 			console.log("Extracted ffmpeg");
 		} else console.log("Using cached ffmpeg");
 
-		for (const profile of ["debug", "release"]) {
-			await fs.mkdir(path.join(targetDir, profile), { recursive: true });
+		for (const profileDir of windowsTargetProfileDirs()) {
+			await fs.mkdir(profileDir, { recursive: true });
 			for (const name of await fs.readdir(path.join(ffmpegDir, "bin"))) {
 				await fs.copyFile(
 					path.join(ffmpegDir, "bin", name),
-					path.join(targetDir, profile, name),
+					path.join(profileDir, name),
 				);
 			}
 		}
-		console.log("Copied ffmpeg DLLs to target/debug and target/release");
+		console.log("Copied ffmpeg DLLs to target profile directories");
 
 		if (!(await fileExists(path.join(targetDir, "native-deps"))))
 			await fs.mkdir(path.join(targetDir, "native-deps"), { recursive: true });
@@ -254,27 +269,7 @@ async function main() {
 				"Visual Studio C++ build tools installation was not found",
 			);
 
-		let libclangPath = path.join(
-			vcInstallDir.trim(),
-			"VC/Tools/LLVM/x64/bin/libclang.dll",
-		);
-		if (!(await fileExists(libclangPath))) {
-			const fallbackLibclang = path.join(
-				targetDir,
-				"native-deps",
-				"libclang",
-				"bin",
-				"libclang.dll",
-			);
-			if (await fileExists(fallbackLibclang)) {
-				libclangPath = fallbackLibclang;
-				console.log(`Using fallback libclang at ${libclangPath}`);
-			} else {
-				throw new Error(
-					`Visual Studio LLVM libclang was not found at ${libclangPath}`,
-				);
-			}
-		}
+		const libclangPath = await setupWindowsLibclang(vcInstallDir);
 
 		cargoConfigContents += `LIBCLANG_PATH = "${libclangPath.replaceAll(
 			"\\",
@@ -553,10 +548,7 @@ async function setupWindowsOnnxRuntime() {
 
 	if (!(await fileExists(outputPath)) || marker !== asset.name) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${targetDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await extractWindowsArchive(archivePath, targetDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		const libDir = path.join(extractDir, "lib");
@@ -576,8 +568,7 @@ async function setupWindowsOnnxRuntime() {
 	const dllNames = (await fs.readdir(outputDir)).filter((name) =>
 		name.toLowerCase().endsWith(".dll"),
 	);
-	for (const profile of ["debug", "release"]) {
-		const profileDir = path.join(targetDir, profile);
+	for (const profileDir of windowsTargetProfileDirs()) {
 		await fs.mkdir(profileDir, { recursive: true });
 		for (const name of dllNames) {
 			await fs.copyFile(
@@ -586,7 +577,7 @@ async function setupWindowsOnnxRuntime() {
 			);
 		}
 	}
-	console.log("Copied ONNX Runtime DLLs to target/debug and target/release");
+	console.log("Copied ONNX Runtime DLLs to target profile directories");
 
 	return outputPath;
 }
@@ -676,10 +667,7 @@ async function setupWindowsDxc() {
 
 	if (currentMarker !== marker || missingAssets.length > 0) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${extractDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await extractWindowsArchive(archivePath, extractDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		for (const file of files)
@@ -691,17 +679,7 @@ async function setupWindowsDxc() {
 		console.log(`Prepared DXC ${asset.version} for ${assetArch}`);
 	} else console.log(`Using cached DXC ${asset.version} for ${assetArch}`);
 
-	const profileDirs = [
-		path.join(targetDir, "debug"),
-		path.join(targetDir, "release"),
-	];
-	if (process.env.RUST_TARGET_TRIPLE)
-		for (const profile of ["debug", "release"])
-			profileDirs.push(
-				path.join(targetDir, process.env.RUST_TARGET_TRIPLE, profile),
-			);
-
-	for (const profileDir of profileDirs) {
+	for (const profileDir of windowsTargetProfileDirs()) {
 		await fs.mkdir(profileDir, { recursive: true });
 		for (const file of files.filter((file) => file.runtime))
 			await fs.copyFile(
@@ -710,6 +688,72 @@ async function setupWindowsDxc() {
 			);
 	}
 	console.log("Copied DXC DLLs to target profile directories");
+}
+
+function windowsTargetProfileDirs() {
+	const desktopTargetDir = path.join(__root, "apps", "desktop-gpui", "target");
+	const profileDirs = [];
+	for (const base of [targetDir, desktopTargetDir]) {
+		for (const profile of ["debug", "release"]) {
+			profileDirs.push(path.join(base, profile));
+			if (process.env.RUST_TARGET_TRIPLE) {
+				profileDirs.push(
+					path.join(base, process.env.RUST_TARGET_TRIPLE, profile),
+				);
+			}
+		}
+	}
+	return profileDirs;
+}
+
+async function setupWindowsLibclang(vcInstallDir) {
+	const vsLibclang = path.join(
+		vcInstallDir.trim(),
+		"VC/Tools/LLVM/x64/bin/libclang.dll",
+	);
+	if (await fileExists(vsLibclang)) {
+		return vsLibclang;
+	}
+
+	const fallbackLibclang = path.join(
+		targetDir,
+		"native-deps",
+		"libclang",
+		"bin",
+		"libclang.dll",
+	);
+	if (await fileExists(fallbackLibclang)) {
+		console.log(`Using cached fallback libclang at ${fallbackLibclang}`);
+		return fallbackLibclang;
+	}
+
+	const asset = {
+		version: "18.1.3.2",
+		name: "libclang.runtime.win-x64.18.1.3.2.zip",
+		url: "https://api.nuget.org/v3-flatcontainer/libclang.runtime.win-x64/18.1.3.2/libclang.runtime.win-x64.18.1.3.2.nupkg",
+		sha256: "524e5cce91f43a74d5bbf57debc42c11b87e8fa86f1fc95be7375dd67b427e18",
+	};
+
+	console.log(`Downloading fallback libclang ${asset.version}`);
+	const archivePath = await downloadVerifiedAsset(asset);
+	const extractDir = path.join(targetDir, asset.name.replace(/\.zip$/, ""));
+	const outputDir = path.join(targetDir, "native-deps", "libclang", "bin");
+	await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+	await extractWindowsArchive(archivePath, extractDir);
+	await fs.mkdir(outputDir, { recursive: true });
+	await fs.copyFile(
+		path.join(extractDir, "runtimes", "win-x64", "native", "libclang.dll"),
+		fallbackLibclang,
+	);
+	console.log(`Prepared fallback libclang at ${fallbackLibclang}`);
+	return fallbackLibclang;
+}
+
+/** @param {string} archivePath @param {string} destination */
+async function extractWindowsArchive(archivePath, destination) {
+	await fs.mkdir(destination, { recursive: true });
+	const tar = path.join(env.SystemRoot ?? "C:/Windows", "System32", "tar.exe");
+	await execFile(tar, ["-xf", archivePath, "-C", destination]);
 }
 
 async function downloadVerifiedAsset(asset) {

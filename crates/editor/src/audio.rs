@@ -1307,6 +1307,11 @@ fn mix_transition_audio_at(
 /// Below this volume a music track is treated as silent and skipped entirely.
 pub(crate) const MUSIC_SILENCE_DB: f32 = -60.0;
 
+/// Keyframed levels are evaluated once per this many samples (about 5 ms)
+/// and ramped between, on a grid fixed to the clip so every render window
+/// produces the same samples.
+const VOLUME_KEYFRAME_BLOCK: i64 = 256;
+
 fn music_gain(volume_db: f32) -> f32 {
     if volume_db <= MUSIC_SILENCE_DB {
         0.0
@@ -1343,10 +1348,19 @@ fn mix_music(
             continue;
         }
 
+        let animated = !segment.volume_keyframes.is_empty();
         let gain = music_gain(segment.volume_db);
-        if gain <= 0.0 {
+        if gain <= 0.0 && !animated {
             continue;
         }
+        let level_at = |local: i64| {
+            music_gain(
+                segment
+                    .volume_at(segment.start + local as f64 / sample_rate)
+                    .volume_db,
+            )
+        };
+        let mut level_block = (i64::MIN, 0.0_f32, 0.0_f32);
 
         let Some(data) = music.get(&segment.path) else {
             continue;
@@ -1381,7 +1395,21 @@ fn mix_music(
                 continue;
             }
 
-            let mut g = gain;
+            let mut g = if animated {
+                let block = local.div_euclid(VOLUME_KEYFRAME_BLOCK);
+                if level_block.0 != block {
+                    level_block = (
+                        block,
+                        level_at(block * VOLUME_KEYFRAME_BLOCK),
+                        level_at((block + 1) * VOLUME_KEYFRAME_BLOCK),
+                    );
+                }
+                let within =
+                    (local - block * VOLUME_KEYFRAME_BLOCK) as f32 / VOLUME_KEYFRAME_BLOCK as f32;
+                level_block.1 + (level_block.2 - level_block.1) * within
+            } else {
+                gain
+            };
             if fade_in > 0 && local < fade_in {
                 g *= local as f32 / fade_in as f32;
             }
@@ -4519,6 +4547,7 @@ mod tests {
         fade_out: f64,
     ) -> cap_project::AudioTrackSegment {
         cap_project::AudioTrackSegment {
+            volume_keyframes: Vec::new(),
             start,
             end,
             track: 0,
@@ -4755,6 +4784,43 @@ mod tests {
         );
         assert!((left_at_second(&stream, 1) - expected(8000)).abs() < 0.02);
         assert!((left_at_second(&stream, 2) - expected(8000)).abs() < 0.02);
+    }
+
+    #[test]
+    fn timeline_music_follows_volume_keyframes() {
+        use cap_project::{Keyframed, VolumeLevel};
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let music_path = dir.path().join("music.wav");
+        write_step_wav(&music_path, &[8000, 8000, 8000, 8000]);
+
+        let mut music = MusicTracks::new();
+        music.insert(
+            "music.wav".to_string(),
+            Arc::new(AudioData::from_file(&music_path).unwrap()),
+        );
+
+        let mut segment = music_track_segment("music.wav", 0.0, 4.0, 0.0, 0.0);
+        assert!(segment.add_keyframe_at(1.0, 0.01));
+        segment.write_volume_at(3.0, VolumeLevel { volume_db: -20.0 }, 0.01);
+        let project = music_project(vec![segment]);
+        let render = |frames_per_call: u64| {
+            let mut renderer = AudioRenderer::new(vec![]).with_music(music.clone());
+            render_export_audio(
+                &mut renderer,
+                &project,
+                frames_per_call,
+                4 * frames_per_call,
+            )
+        };
+        let stream = render(30);
+
+        let full = expected(8000);
+        assert!((left_at_second(&stream, 0) - full).abs() < 0.02);
+        let middle = left_at_second(&stream, 2);
+        assert!(middle < full * 0.9 && middle > full * 0.1, "{middle}");
+        assert!((left_at_second(&stream, 3) - full * 0.1).abs() < 0.02);
+        assert_eq!(stream, render(60), "window size must not change the mix");
     }
 
     // A linear fade-in ramps the gain from 0 at the clip start to full at

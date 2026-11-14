@@ -801,18 +801,37 @@ pub fn pasted(shapes: &[ShapeSegment], time: f64, offset: (f64, f64)) -> Vec<Sha
 }
 
 impl EditorWindow {
-    fn shape_segments(&self) -> &[ShapeSegment] {
-        self.project
-            .timeline
-            .as_ref()
-            .map_or(&[], |timeline| timeline.shape_segments.as_slice())
+    /// The shapes as they stand at the playhead, which is what every canvas
+    /// read wants: a keyframed shape is hit, dragged and drawn where it is
+    /// now, not where it starts.
+    fn shape_segments(&self) -> std::borrow::Cow<'_, [ShapeSegment]> {
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return std::borrow::Cow::Borrowed(&[]);
+        };
+        if timeline
+            .shape_segments
+            .iter()
+            .all(|segment| segment.keyframes.is_empty())
+        {
+            return std::borrow::Cow::Borrowed(timeline.shape_segments.as_slice());
+        }
+        let time = self.preview_or_playhead();
+        std::borrow::Cow::Owned(
+            timeline
+                .shape_segments
+                .iter()
+                .map(|segment| segment.resolved_at(time).into_owned())
+                .collect(),
+        )
     }
 
     pub(crate) fn hovering_visible_shape(&self) -> bool {
         let time = self.preview_or_playhead();
-        self.shape_hover
-            .and_then(|index| self.shape_segments().get(index))
-            .is_some_and(|segment| segment.is_active_at(time))
+        self.shape_hover.is_some_and(|index| {
+            self.shape_segments()
+                .get(index)
+                .is_some_and(|segment| segment.is_active_at(time))
+        })
     }
 
     pub(crate) fn selected_shape_indices(&self) -> Vec<usize> {
@@ -984,7 +1003,7 @@ impl EditorWindow {
         );
         segment.track = lane;
         if kind == ShapeKind::Badge {
-            segment.number = cap_project::next_badge_number(self.shape_segments());
+            segment.number = cap_project::next_badge_number(&self.shape_segments());
         }
         segment
     }
@@ -1118,7 +1137,7 @@ impl EditorWindow {
                     let selected = self.selected_shape_indices();
                     let selected_one = (selected.len() == 1).then(|| selected[0]);
                     topmost_hit(
-                        self.shape_segments(),
+                        &self.shape_segments(),
                         &self.visible_shape_order(self.preview_or_playhead()),
                         canvas,
                         point,
@@ -1180,7 +1199,7 @@ impl EditorWindow {
             return;
         }
         let Some(index) = topmost_hit(
-            self.shape_segments(),
+            &self.shape_segments(),
             &self.visible_shape_order(self.preview_or_playhead()),
             canvas,
             point,
@@ -1412,13 +1431,23 @@ impl EditorWindow {
     }
 
     fn write_shape(&mut self, index: usize, change: impl FnOnce(&mut ShapeSegment)) {
+        let time = self.preview_or_playhead();
         if let Some(segment) = self
             .project
             .timeline
             .as_mut()
             .and_then(|timeline| timeline.shape_segments.get_mut(index))
         {
-            change(segment);
+            if segment.keyframes.is_empty() {
+                change(segment);
+                return;
+            }
+            let mut still = segment.resolved_at(time).into_owned();
+            change(&mut still);
+            let pose = still.pose_at(time);
+            still.keyframes = std::mem::take(&mut segment.keyframes);
+            *segment = still;
+            segment.write_pose_at(time, pose, crate::editor_keyframes::KEYFRAME_TOLERANCE);
         }
     }
 
@@ -1438,6 +1467,7 @@ impl EditorWindow {
             self.shape_tool = None;
         }
         if drag.moved || matches!(drag.mode, ShapeDragMode::Draw { .. }) {
+            self.rebuild_timeline();
             self.schedule_save(window, cx);
             self.note_edit("shape-drag", Some(TrackKind::Shape));
         }
@@ -1509,7 +1539,12 @@ impl EditorWindow {
         let mut placed = self.overlay_placed_spans();
         let mut copies = Vec::new();
         for index in indices {
-            let Some(source) = self.shape_segments().get(index) else {
+            let Some(source) = self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.shape_segments.get(index))
+            else {
                 continue;
             };
             let mut copy = source.clone();
@@ -2017,18 +2052,28 @@ impl EditorWindow {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.slider_field(
+        let field = self.slider_field(
             label,
             SliderKey::Panel(PanelSlider::Shape(property), index),
             unit,
             cx,
-        )
-        .into_any_element()
+        );
+        if property == ShapeProperty::Opacity {
+            return self.keyframe_slider(
+                crate::editor_timeline::TrackKind::Shape,
+                index,
+                "opacity",
+                field,
+                cx,
+            );
+        }
+        field.into_any_element()
     }
 
     pub(crate) fn render_shape_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
-        let Some(segment) = self.shape_segments().get(index) else {
+        let shapes = self.shape_segments();
+        let Some(segment) = shapes.get(index) else {
             return div().into_any_element();
         };
         let kind = segment.kind;
@@ -2388,6 +2433,7 @@ impl EditorWindow {
 
         more = more.child(enabled_row);
         panel
+            .child(self.render_keyframes(crate::editor_timeline::TrackKind::Shape, index, cx))
             .child(self.more_settings("shape", cx, move |_, _| more.into_any_element()))
             .into_any_element()
     }

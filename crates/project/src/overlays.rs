@@ -5,6 +5,7 @@ use crate::{
 
 pub fn default_text_segment(start: f64, end: f64, track: u32) -> TextSegment {
     TextSegment {
+        keyframes: Vec::new(),
         start,
         end,
         track,
@@ -43,6 +44,7 @@ pub fn default_text_segment(start: f64, end: f64, track: u32) -> TextSegment {
 pub fn default_mask_segment(start: f64, end: f64, track: u32) -> MaskSegment {
     let contract = mask_effect_contract();
     MaskSegment {
+        motion: Vec::new(),
         start,
         end,
         track,

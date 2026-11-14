@@ -98,11 +98,17 @@ pub struct ShapeSegment {
     pub animation_in_duration: f64,
     pub animation_out_duration: f64,
     pub number: u32,
+    /// Whole-pose keyframes. While any exist they decide the two points and
+    /// `opacity`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[specta(skip)]
+    pub keyframes: Vec<crate::LayerKeyframe>,
 }
 
 impl Default for ShapeSegment {
     fn default() -> Self {
         Self {
+            keyframes: Vec::new(),
             start: 0.0,
             end: 0.0,
             track: 0,
@@ -300,6 +306,7 @@ mod tests {
     #[test]
     fn round_trips_every_field() {
         let segment = ShapeSegment {
+            keyframes: Vec::new(),
             start: 1.5,
             end: 4.25,
             track: 2,

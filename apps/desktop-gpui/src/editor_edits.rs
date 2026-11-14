@@ -682,35 +682,42 @@ impl TrackSegmentOps for MaskSegment {
         {
             *time += shift;
         }
-        self.start = value;
+        cap_project::Keyframed::trim_start_keeping_motion(self, value);
     }
     fn lane(&self) -> u32 {
         self.track
     }
 }
-impl_track_segment!(TextSegment, lane: track);
-impl_track_segment!(ShapeSegment, lane: track);
+
+macro_rules! impl_keyframed_track_segment {
+    ($type:ty) => {
+        impl TrackSegmentOps for $type {
+            fn start(&self) -> f64 {
+                self.start
+            }
+            fn end(&self) -> f64 {
+                self.end
+            }
+            fn set_start(&mut self, value: f64) {
+                self.start = value;
+            }
+            fn set_end(&mut self, value: f64) {
+                self.end = value;
+            }
+            fn trim_start_to(&mut self, value: f64) {
+                cap_project::Keyframed::trim_start_keeping_motion(self, value);
+            }
+            fn lane(&self) -> u32 {
+                self.track
+            }
+        }
+    };
+}
+
+impl_keyframed_track_segment!(TextSegment);
+impl_keyframed_track_segment!(ShapeSegment);
+impl_keyframed_track_segment!(cap_project::ImageSegment);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
-impl TrackSegmentOps for cap_project::ImageSegment {
-    fn start(&self) -> f64 {
-        self.start
-    }
-    fn end(&self) -> f64 {
-        self.end
-    }
-    fn set_start(&mut self, value: f64) {
-        self.start = value;
-    }
-    fn set_end(&mut self, value: f64) {
-        self.end = value;
-    }
-    fn trim_start_to(&mut self, value: f64) {
-        self.trim_start_keeping_motion(value);
-    }
-    fn lane(&self) -> u32 {
-        self.track
-    }
-}
 
 impl TrackSegmentOps for CaptionTrackSegment {
     fn start(&self) -> f64 {
@@ -758,7 +765,7 @@ impl TrackSegmentOps for KeyboardTrackSegment {
 impl TrackSegmentOps for AudioTrackSegment {
     fn trim_start_to(&mut self, value: f64) {
         self.trim_start = (self.trim_start + (value - self.start)).max(0.);
-        self.start = value;
+        cap_project::Keyframed::trim_start_keeping_motion(self, value);
     }
     fn start(&self) -> f64 {
         self.start
@@ -780,7 +787,7 @@ impl TrackSegmentOps for AudioTrackSegment {
     /// (`ED/context.ts:855-862`).
     fn split_tail(&self, at: f64) -> Self {
         let mut tail = self.clone();
-        tail.start = self.start + at;
+        cap_project::Keyframed::trim_start_keeping_motion(&mut tail, self.start + at);
         tail.trim_start = self.trim_start + at;
         tail.fade_in = 0.;
         tail
@@ -2403,6 +2410,7 @@ pub fn default_audio_segment(
     duration: Option<f64>,
 ) -> AudioTrackSegment {
     AudioTrackSegment {
+        volume_keyframes: Vec::new(),
         start,
         end,
         track,
@@ -4022,6 +4030,7 @@ mod tests {
     #[test]
     fn a_shared_edge_splits_between_both_segments_handles() {
         let clip = |start: f64, end: f64| Segment {
+            keyframes: Default::default(),
             start,
             end,
             lane: 0,
@@ -4074,12 +4083,14 @@ mod tests {
     fn hit_testing_ignores_other_lanes() {
         let masks = vec![
             Segment {
+                keyframes: Default::default(),
                 start: 0.,
                 end: 5.,
                 lane: 0,
                 detail: SegmentDetail::Mask { label: "Sensitive" },
             },
             Segment {
+                keyframes: Default::default(),
                 start: 0.,
                 end: 5.,
                 lane: 1,
