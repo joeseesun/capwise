@@ -181,7 +181,7 @@ async function main() {
 				path.join(targetDir, "ffmpeg-extract-"),
 			);
 			try {
-				await execFile("tar.exe", ["xf", ffmpegZipPath, "-C", extractionDir]);
+				await extractWindowsArchive(ffmpegZipPath, extractionDir);
 				const extractedFfmpeg = path.join(extractionDir, FFMPEG_ZIP_NAME);
 				const missingLibraries = await missingFfmpegLibraries(
 					path.join(extractedFfmpeg, "lib"),
@@ -548,10 +548,7 @@ async function setupWindowsOnnxRuntime() {
 
 	if (!(await fileExists(outputPath)) || marker !== asset.name) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${targetDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await extractWindowsArchive(archivePath, targetDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		const libDir = path.join(extractDir, "lib");
@@ -670,10 +667,7 @@ async function setupWindowsDxc() {
 
 	if (currentMarker !== marker || missingAssets.length > 0) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${extractDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await extractWindowsArchive(archivePath, extractDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		for (const file of files)
@@ -745,10 +739,7 @@ async function setupWindowsLibclang(vcInstallDir) {
 	const extractDir = path.join(targetDir, asset.name.replace(/\.zip$/, ""));
 	const outputDir = path.join(targetDir, "native-deps", "libclang", "bin");
 	await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-	await exec(
-		`Expand-Archive -Path "${archivePath}" -DestinationPath "${extractDir}" -Force`,
-		{ shell: "powershell.exe" },
-	);
+	await extractWindowsArchive(archivePath, extractDir);
 	await fs.mkdir(outputDir, { recursive: true });
 	await fs.copyFile(
 		path.join(extractDir, "runtimes", "win-x64", "native", "libclang.dll"),
@@ -756,6 +747,13 @@ async function setupWindowsLibclang(vcInstallDir) {
 	);
 	console.log(`Prepared fallback libclang at ${fallbackLibclang}`);
 	return fallbackLibclang;
+}
+
+/** @param {string} archivePath @param {string} destination */
+async function extractWindowsArchive(archivePath, destination) {
+	await fs.mkdir(destination, { recursive: true });
+	const tar = path.join(env.SystemRoot ?? "C:/Windows", "System32", "tar.exe");
+	await execFile(tar, ["-xf", archivePath, "-C", destination]);
 }
 
 async function downloadVerifiedAsset(asset) {
