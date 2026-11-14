@@ -119,6 +119,8 @@ pub struct CaptionOverlayLayout {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CaptionFrameBox {
     pub bounds: [f32; 4],
+    /// The size the source line is set at, in output-frame pixels.
+    pub font_size: f32,
     position: CaptionPosition,
 }
 
@@ -126,6 +128,7 @@ impl CaptionFrameBox {
     pub fn new(bounds: [f32; 4], position: &str) -> Self {
         Self {
             bounds,
+            font_size: 0.0,
             position: CaptionPosition::from_str(position),
         }
     }
@@ -1472,6 +1475,7 @@ impl CaptionsLayer {
                 resting[0] + resting[2],
                 resting[1] + resting[3],
             ],
+            font_size: effective_font_size,
             position,
         });
         record_caption_center(position, resting, (width, height));
@@ -1591,7 +1595,7 @@ impl CaptionsLayer {
         }
 
         self.background_scissor = Some([scissor_x, scissor_y, scissor_width, scissor_height]);
-        self.has_caption = true;
+        self.has_caption = !uniforms.project.editing_caption;
     }
 
     pub fn has_content(&self) -> bool {

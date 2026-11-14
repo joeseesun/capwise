@@ -638,14 +638,21 @@ impl EditorWindow {
         self.canvas_overlay_visible() && !self.pane_scene() && self.camera_rect().is_some()
     }
 
+    /// The caption's box on the preview. A manual caption is placed from its
+    /// stored centre so a drag never waits on a frame; a preset one is where
+    /// the renderer drew it.
     fn caption_rect(&self) -> Option<NormRect> {
         let layout = self.frame_layout.as_ref()?;
         let captions = self.project.captions.as_ref()?;
+        if !captions.settings.enabled {
+            return None;
+        }
         caption_canvas_rect(layout, captions.settings.manual_position)
+            .or_else(|| self.caption_drawn_rect())
     }
 
     fn show_captions(&self) -> bool {
-        self.canvas_overlay_visible() && self.caption_rect().is_some()
+        self.canvas_overlay_visible() && !self.caption_edit_open() && self.caption_rect().is_some()
     }
 
     /// `displayDraggable()` (`:249`): the rendered display rect is
@@ -787,6 +794,36 @@ impl EditorWindow {
             self.assistant.open = false;
             self.sidebar.tab = crate::editor_sidebar::SidebarTab::Captions;
         }
+        if element == CanvasSelection::Captions {
+            let Some(index) = self.caption_index_at(self.preview_or_playhead()) else {
+                return;
+            };
+            self.assistant.open = false;
+            let line = self.caption_rect().and_then(|rect| {
+                let frame = self.canvas_bounds()?;
+                let y = f64::from(
+                    f32::from(event.position.y - frame.origin.y)
+                        / f32::from(frame.size.height).max(1.),
+                );
+                Some(if y > rect.y + rect.h * 0.6 {
+                    crate::caption_canvas::CaptionLine::Translation
+                } else {
+                    crate::caption_canvas::CaptionLine::Source
+                })
+            });
+            let bilingual = self.project.captions.as_ref().is_some_and(|captions| {
+                captions.settings.display_mode == cap_project::CaptionDisplayMode::Bilingual
+            });
+            let line = line.filter(|_| bilingual);
+            // A press opens the caption for typing at once. If it then moves,
+            // it becomes a drag and the untouched edit closes again.
+            self.begin_caption_edit(index, line, false, window, cx);
+            if event.click_count > 1 || self.caption_edit.is_none() {
+                return;
+            }
+            self.caption_press = true;
+            self.canvas_selection = Some(element);
+        }
         if let Some((kind, index)) = element.timeline_selection() {
             self.canvas_selection = Some(element);
             self.set_selection(
@@ -922,8 +959,18 @@ impl EditorWindow {
         );
         // `if (!state.moved && Math.hypot(...) < 2) return` (`:299-309`): a
         // plain click must not write config.
-        if !drag.moved && delta.0.hypot(delta.1) < 2. {
+        // A press on a caption is usually a click to type, and a trackpad
+        // click wobbles a few pixels, so the caption waits for a real drag.
+        let threshold = if drag.element == CanvasSelection::Captions {
+            5.
+        } else {
+            2.
+        };
+        if !drag.moved && delta.0.hypot(delta.1) < threshold {
             return;
+        }
+        if std::mem::take(&mut self.caption_press) {
+            self.cancel_caption_edit(window, cx);
         }
         self.apply_canvas_drag(delta, event.modifiers.shift, canvas, window, cx);
     }
@@ -1128,6 +1175,7 @@ impl EditorWindow {
         self.history.resume(&config);
         self.snap_guides.clear();
         self.canvas_overlay_rect = None;
+        self.caption_press = false;
         if drag.moved {
             if !matches!(
                 drag.element,
@@ -1303,6 +1351,7 @@ impl EditorWindow {
             return;
         }
         captions.settings.manual_position = Some(next);
+        captions.settings.position = "manual".to_string();
         self.project_changed_live(cx);
     }
 
@@ -1979,7 +2028,9 @@ impl EditorWindow {
             .top(px(top))
             .w(px(width))
             .h(px(height))
-            .cursor(if draggable {
+            .cursor(if element == CanvasSelection::Captions {
+                CursorStyle::IBeam
+            } else if draggable {
                 CursorStyle::OpenHand
             } else {
                 CursorStyle::Arrow
@@ -2028,7 +2079,11 @@ impl EditorWindow {
                     .text_size(px(11.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(gpui::white())
-                    .child(element.label()),
+                    .child(if element == CanvasSelection::Captions {
+                        tr::editor::canvas::caption_hint().into()
+                    } else {
+                        element.label()
+                    }),
             );
 
             if let Some(message) = locked_message {

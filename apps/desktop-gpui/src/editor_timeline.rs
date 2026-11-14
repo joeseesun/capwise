@@ -1408,6 +1408,28 @@ pub struct TimelineModel {
     pub clip_ghost_gap: Option<(f64, f64)>,
 }
 
+pub(crate) fn caption_track_segments(
+    segments: &[CaptionTrackSegment],
+    total_duration: f64,
+) -> Vec<Segment> {
+    segments
+        .iter()
+        .map(|segment| Segment {
+            keyframes: Default::default(),
+            start: segment.start,
+            end: segment.end.min(total_duration),
+            lane: 0,
+            detail: SegmentDetail::Caption {
+                text: if segment.text.is_empty() {
+                    SharedString::new_static(tr::editor::timeline::segment::caption())
+                } else {
+                    SharedString::from(segment.text.clone())
+                },
+            },
+        })
+        .collect()
+}
+
 impl TimelineModel {
     pub fn track_height(&self) -> f32 {
         TRACK_HEIGHT
@@ -1658,23 +1680,7 @@ impl TimelineModel {
 
         // Captions and keyboard clamp their box to `totalDuration`
         // (`TL/CaptionsTrack.tsx:196-199`, `TL/KeyboardTrack.tsx:189-192`).
-        let caption = timeline
-            .caption_segments
-            .iter()
-            .map(|segment: &CaptionTrackSegment| Segment {
-                keyframes: Default::default(),
-                start: segment.start,
-                end: segment.end.min(total_duration),
-                lane: 0,
-                detail: SegmentDetail::Caption {
-                    text: if segment.text.is_empty() {
-                        SharedString::new_static(tr::editor::timeline::segment::caption())
-                    } else {
-                        SharedString::from(segment.text.clone())
-                    },
-                },
-            })
-            .collect();
+        let caption = caption_track_segments(&timeline.caption_segments, total_duration);
 
         let keyboard = timeline
             .keyboard_segments

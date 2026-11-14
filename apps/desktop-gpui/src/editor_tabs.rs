@@ -1709,7 +1709,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut CaptionSettings),
     ) {
-        self.set_caption_setting_inner(true, reason, window, cx, change);
+        self.set_caption_setting_inner(false, reason, window, cx, change);
     }
 
     fn set_caption_setting_inner(

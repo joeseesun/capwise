@@ -25,6 +25,7 @@ mod camera_blur_portable;
 mod camera_loading;
 mod camera_window;
 mod caption_breaks;
+mod caption_canvas;
 mod caption_replace;
 mod caption_review;
 mod caption_translation;

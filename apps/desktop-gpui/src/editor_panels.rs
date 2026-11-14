@@ -3252,13 +3252,14 @@ impl EditorWindow {
                 self.commit_title_card_field(index, key, text, final_commit, window, cx);
             }
             FieldKey::CaptionText(index) => {
-                self.edit_caption_segment("caption-text", index, window, cx, move |segment| {
-                    if segment.text == text {
-                        return false;
-                    }
-                    segment.text = text;
-                    true
-                });
+                if self.edit_caption_text_live(index, text) {
+                    self.schedule_save(window, cx);
+                    self.invalidate_caption_views(cx);
+                }
+                if final_commit {
+                    self.queue_caption_translation_update(window, cx);
+                    self.note_project_edit("caption-text");
+                }
             }
             FieldKey::AudioName(index) => {
                 self.edit_audio_segment("audio-name", index, window, cx, move |segment| {
@@ -6429,6 +6430,18 @@ impl EditorWindow {
                 self.keyframe_slider(TrackKind::Audio, index, "volume", field, cx)
             })
             .child(self.render_keyframes(TrackKind::Audio, index, cx))
+            .child(self.slider_field(
+                tr::editor::panel::audio::fade_in(),
+                SliderKey::Panel(PanelSlider::AudioFadeIn, index),
+                "secs",
+                cx,
+            ))
+            .child(self.slider_field(
+                tr::editor::panel::audio::fade_out(),
+                SliderKey::Panel(PanelSlider::AudioFadeOut, index),
+                "secs",
+                cx,
+            ))
             .child(
                 div()
                     .flex()
@@ -6447,18 +6460,6 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .gap(px(14.))
-                    .child(this.slider_field(
-                        tr::editor::panel::audio::fade_in(),
-                        SliderKey::Panel(PanelSlider::AudioFadeIn, index),
-                        "secs",
-                        cx,
-                    ))
-                    .child(this.slider_field(
-                        tr::editor::panel::audio::fade_out(),
-                        SliderKey::Panel(PanelSlider::AudioFadeOut, index),
-                        "secs",
-                        cx,
-                    ))
                     .child(
                         ui::Field::stacked(&theme, tr::editor::panel::name())
                             .child(this.render_field_input(FieldKey::AudioName(index), None)),

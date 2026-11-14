@@ -1664,6 +1664,10 @@ pub struct EditorWindow {
     /// `editorState.canvasSelection`.
     pub(crate) canvas_selection: Option<crate::editor_canvas::CanvasSelection>,
     pub(crate) canvas_text_edit: Option<crate::editor_canvas::CanvasTextEdit>,
+    pub(crate) caption_edit: Option<crate::caption_canvas::CaptionCanvasEdit>,
+    /// The caption edit a press on the preview caption opened, still open to
+    /// become a drag instead.
+    pub(crate) caption_press: bool,
     /// `hovered` on `ElementBox` (`CanvasElementsOverlay.tsx:790`).
     pub(crate) hovered_canvas: Option<crate::editor_canvas::CanvasSelection>,
     /// The live display/camera drag.
@@ -2254,6 +2258,7 @@ impl EditorWindow {
             },
         ));
         let markers_state = markers::MarkersState::new(window, cx, &mut text_events);
+        text_events.push(crate::caption_canvas::install_caption_keys(window, cx));
         let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
         let preview = cx.new(|_| PreviewFrameView::new(player_frame_rect.clone()));
         let editor = cx.entity();
@@ -2393,6 +2398,8 @@ impl EditorWindow {
             player_frame_rect,
             canvas_selection: None,
             canvas_text_edit: None,
+            caption_edit: None,
+            caption_press: false,
             hovered_canvas: None,
             player_panel_bounds: ui::SliderTrack::default(),
             player_panel_hovered: false,
@@ -2999,6 +3006,88 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// One keystroke in a caption's text box. The full write path would
+    /// rebuild every timeline track, re-plan translations and re-render every
+    /// editor section per character; a text change only moves the caption
+    /// track, the sidebar list and the preview. Translations catch up when
+    /// the box commits.
+    pub(crate) fn edit_caption_text_live(&mut self, index: usize, text: String) -> bool {
+        if !self.project_ready() || self.voiceover.is_busy() {
+            return false;
+        }
+        let Some(segment) = self
+            .project
+            .timeline
+            .as_mut()
+            .and_then(|timeline| timeline.caption_segments.get_mut(index))
+        else {
+            return false;
+        };
+        if segment.text == text {
+            return false;
+        }
+        segment.text = text;
+        crate::transcription::write_caption_edit_to_source(
+            &mut self.project,
+            index,
+            &self.clip_display_durations,
+        );
+        self.caption_content_changed();
+        true
+    }
+
+    /// A write that only touched caption text or words, through the parts of
+    /// the shared fan-out it can affect. The timeline model reads nothing of
+    /// the captions but their track's boxes and labels, so only that track is
+    /// rebuilt.
+    pub(crate) fn edit_caption_content(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) -> bool {
+        if !self.project_ready() || self.voiceover.is_busy() {
+            return false;
+        }
+        if !change(&mut self.project) {
+            return false;
+        }
+        self.caption_content_changed();
+        self.schedule_save(window, cx);
+        self.queue_caption_translation_update(window, cx);
+        self.invalidate_caption_views(cx);
+        tracing::info!(reason, undo = self.history.can_undo(), "caption edit");
+        true
+    }
+
+    fn caption_content_changed(&mut self) {
+        self.synchronize_caption_track(false);
+        self.history.record(&self.project);
+        self.caption_track_replaced();
+    }
+
+    /// The caption track changed under the views that draw it.
+    pub(crate) fn caption_track_replaced(&mut self) {
+        self.transcript.dirty = true;
+        if let Some(timeline) = self.project.timeline.as_ref() {
+            self.timeline.caption = crate::editor_timeline::caption_track_segments(
+                &timeline.caption_segments,
+                self.timeline.total_duration,
+            );
+        }
+        self.publish_project();
+    }
+
+    /// Every section that draws caption text or the undo state a caption
+    /// edit moves. The toolbar and transport stay cached.
+    pub(crate) fn invalidate_caption_views(&mut self, cx: &mut Context<Self>) {
+        self.header.update(cx, |_, cx| cx.notify());
+        self.sidebar_view.update(cx, |_, cx| cx.notify());
+        self.transcript_view.update(cx, |_, cx| cx.notify());
+        self.timeline_view.update(cx, |_, cx| cx.notify());
+    }
+
     /// Swaps refined word times into the project and into every undo entry
     /// they apply to, so the refinement is not an undo step of its own and
     /// undoing an earlier edit keeps the refined times.
@@ -3085,6 +3174,7 @@ impl EditorWindow {
             return;
         };
         let mut preview = self.project.clone();
+        preview.editing_caption = self.caption_edit_hides_caption();
         if let Some(edit) = &self.canvas_text_edit {
             preview.editing_text_segment = Some(edit.index);
             if let Some(segment) = preview
@@ -3139,6 +3229,7 @@ impl EditorWindow {
             return;
         }
         self.commit_caption_editor_edit(window, cx);
+        self.finish_caption_edit(window, cx);
         self.stop_canvas_text_edit(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
@@ -3156,6 +3247,7 @@ impl EditorWindow {
             return;
         }
         self.commit_caption_editor_edit(window, cx);
+        self.finish_caption_edit(window, cx);
         self.stop_canvas_text_edit(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
@@ -3675,6 +3767,7 @@ impl EditorWindow {
             && next >= until - 1. / f64::from(EDITOR_PREVIEW_FPS)
         {
             self.stop_playback(cx);
+            self.caption_audition_ended(cx);
         }
 
         if self.playing && self.is_at_end() {
@@ -4688,6 +4781,12 @@ impl EditorWindow {
             {
                 cx.stop_propagation();
                 window.refresh();
+            }
+            "enter" if !keystroke.modifiers.modified() => {
+                if self.edit_selected_caption(window, cx) {
+                    cx.stop_propagation();
+                    window.refresh();
+                }
             }
             "s" => {
                 cx.stop_propagation();
@@ -6639,7 +6738,7 @@ fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
     }
 }
 
-fn split_caption_segment(
+pub(crate) fn split_caption_segment(
     project: &mut ProjectConfiguration,
     index: usize,
     at: f64,
@@ -12500,12 +12599,25 @@ impl EditorWindow {
                     this.focus_root(window, cx);
                 }
             }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    if this.caption_click_while_playing(event, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .child(body)
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
             .children(if self.project_ready() {
                 self.render_canvas_overlay(cx)
+            } else {
+                None
+            })
+            .children(if self.project_ready() {
+                self.render_caption_edit(cx)
             } else {
                 None
             })
@@ -14099,6 +14211,7 @@ fn is_playback_shortcut(
 
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_caption_edit(window, cx);
         if self.audio_picker.is_none() && !self.voiceover.is_open() {
             self.library_audition = None;
         }
