@@ -3662,7 +3662,9 @@ impl EditorWindow {
                 let (min, max, _) = self.panel_slider_limits(slider, index);
                 let raw = match slider {
                     PanelSlider::TextLayoutTransition => segment.layout_transition as f32,
-                    PanelSlider::TextFontSize => segment.font_size,
+                    PanelSlider::TextFontSize => {
+                        segment.pose_at(self.preview_or_playhead()).font_size
+                    }
                     PanelSlider::TextLineHeight => segment.line_height,
                     PanelSlider::TextLetterSpacing => segment.letter_spacing,
                     PanelSlider::TextOpacity => segment.pose_at(self.preview_or_playhead()).opacity,
@@ -3696,14 +3698,12 @@ impl EditorWindow {
                 .map_or(15., |segment| {
                     segment.fade_duration_override.unwrap_or(0.15) * 100.
                 }),
-            PanelSlider::MaskAmount => timeline
-                .mask_segments
-                .get(index)
-                .map_or(4., |segment| mask_effect_amount(segment) as f32),
-            PanelSlider::MaskDarkness => timeline
-                .mask_segments
-                .get(index)
-                .map_or(0., |segment| segment.darkness as f32),
+            PanelSlider::MaskAmount => timeline.mask_segments.get(index).map_or(4., |segment| {
+                mask_effect_amount(&segment.resolved_at(self.preview_or_playhead())) as f32
+            }),
+            PanelSlider::MaskDarkness => timeline.mask_segments.get(index).map_or(0., |segment| {
+                segment.pose_at(self.preview_or_playhead()).darkness as f32
+            }),
             PanelSlider::MaskFade => timeline
                 .mask_segments
                 .get(index)
@@ -3823,7 +3823,7 @@ impl EditorWindow {
             | PanelSlider::TextStroke
             | PanelSlider::TextGlow => {
                 let time = self.preview_or_playhead();
-                self.edit_text_segment("text-slider", index, window, cx, move |segment| {
+                let apply = move |segment: &mut TextSegment| {
                     match slider {
                         PanelSlider::TextLayoutTransition => {
                             segment.layout_transition = f64::from(value.clamp(0.1, 1.5))
@@ -3863,20 +3863,15 @@ impl EditorWindow {
                                 value.clamp(-2., 20.)
                             }
                         }
-                        PanelSlider::TextOpacity => {
-                            let mut pose = segment.pose_at(time);
-                            pose.opacity = value.clamp(0., 1.);
-                            segment.write_pose_at(
-                                time,
-                                pose,
-                                crate::editor_keyframes::KEYFRAME_TOLERANCE,
-                            );
-                        }
+                        PanelSlider::TextOpacity => segment.opacity = value.clamp(0., 1.),
                         PanelSlider::TextStroke => segment.stroke_width = value.clamp(0., 12.),
                         PanelSlider::TextGlow => segment.glow = value.clamp(0., 1.),
                         _ => segment.shadow = value.clamp(0., 1.),
                     }
                     true
+                };
+                self.edit_text_segment("text-slider", index, window, cx, move |segment| {
+                    segment.edit_at(time, crate::editor_keyframes::KEYFRAME_TOLERANCE, apply)
                 })
             }
             // `setAnimationDuration` (`:3644-3656`): the legacy symmetric
@@ -3928,18 +3923,30 @@ impl EditorWindow {
             // `setMaskEffectAmount` (`:4388-4393`): re-encode, and reset the
             // opacity and intensity keyframes the old model used.
             PanelSlider::MaskAmount => {
+                let time = self.preview_or_playhead();
                 self.edit_mask_segment("mask-amount", index, window, cx, move |segment| {
-                    let effect = mask_effect(segment);
-                    segment.pixelation = encode_mask_effect(effect, f64::from(value));
-                    segment.opacity = 1.;
                     segment.keyframes.intensity.clear();
-                    true
+                    segment.edit_at(
+                        time,
+                        crate::editor_keyframes::KEYFRAME_TOLERANCE,
+                        |segment| {
+                            let effect = mask_effect(segment);
+                            segment.pixelation = encode_mask_effect(effect, f64::from(value));
+                            segment.opacity = 1.;
+                            true
+                        },
+                    )
                 })
             }
             PanelSlider::MaskDarkness | PanelSlider::MaskFade => {
+                let time = self.preview_or_playhead();
                 self.edit_mask_segment("mask-slider", index, window, cx, move |segment| {
                     if slider == PanelSlider::MaskDarkness {
-                        segment.darkness = f64::from(value);
+                        segment.edit_at(
+                            time,
+                            crate::editor_keyframes::KEYFRAME_TOLERANCE,
+                            |segment| segment.darkness = f64::from(value),
+                        );
                     } else {
                         segment.fade_duration = f64::from(value);
                     }
@@ -6525,6 +6532,17 @@ impl EditorWindow {
                 segment.pixelation = encode_mask_effect(next, amount);
                 segment.opacity = 1.;
                 segment.keyframes.intensity.clear();
+                let offset = mask_effect_contract().blur_encoding_offset;
+                for key in &mut segment.motion {
+                    let stored = key.value.pixelation;
+                    let amount = if stored >= offset {
+                        stored - offset
+                    } else {
+                        stored
+                    };
+                    key.value.pixelation = encode_mask_effect(next, amount);
+                    key.value.opacity = 1.;
+                }
                 true
             });
         }));

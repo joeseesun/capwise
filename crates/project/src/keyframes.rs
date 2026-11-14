@@ -67,6 +67,79 @@ impl KeyframeValue for LayerPose {
     }
 }
 
+/// A text layer at one instant. `font_size` is in pixels at the 1080p
+/// reference height, like the segment's own.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPose {
+    pub center: XY<f64>,
+    pub size: XY<f64>,
+    pub opacity: f32,
+    pub font_size: f32,
+}
+
+impl KeyframeValue for TextPose {
+    type Channels = [f64; 6];
+
+    fn channels(&self) -> [f64; 6] {
+        [
+            self.center.x,
+            self.center.y,
+            self.size.x,
+            self.size.y,
+            f64::from(self.opacity),
+            f64::from(self.font_size),
+        ]
+    }
+
+    fn from_channels(values: [f64; 6]) -> Self {
+        Self {
+            center: XY::new(values[0], values[1]),
+            size: XY::new(values[2], values[3]),
+            opacity: values[4] as f32,
+            font_size: values[5] as f32,
+        }
+    }
+}
+
+/// A mask at one instant. `pixelation` is the encoded blur or pixelate
+/// amount and `darkness` the highlight's surround, as on the segment.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskPose {
+    pub center: XY<f64>,
+    pub size: XY<f64>,
+    pub opacity: f64,
+    pub pixelation: f64,
+    pub darkness: f64,
+}
+
+impl KeyframeValue for MaskPose {
+    type Channels = [f64; 7];
+
+    fn channels(&self) -> [f64; 7] {
+        [
+            self.center.x,
+            self.center.y,
+            self.size.x,
+            self.size.y,
+            self.opacity,
+            self.pixelation,
+            self.darkness,
+        ]
+    }
+
+    fn from_channels(values: [f64; 7]) -> Self {
+        Self {
+            center: XY::new(values[0], values[1]),
+            size: XY::new(values[2], values[3]),
+            opacity: values[4],
+            pixelation: values[5],
+            darkness: values[6],
+        }
+    }
+}
+
 /// A clip's gain at one instant, in decibels.
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +174,8 @@ pub struct Keyframe<V> {
 }
 
 pub type LayerKeyframe = Keyframe<LayerPose>;
+pub type TextKeyframe = Keyframe<TextPose>;
+pub type MaskKeyframe = Keyframe<MaskPose>;
 pub type VolumeKeyframe = Keyframe<VolumeLevel>;
 
 fn is_usable<V: KeyframeValue>(key: &Keyframe<V>) -> bool {
@@ -509,36 +584,39 @@ keyframed_segment!(
 );
 
 keyframed_segment!(
-    crate::TextSegment, LayerPose, keyframes,
-    base: |segment| LayerPose {
+    crate::TextSegment, TextPose, keyframes,
+    base: |segment| TextPose {
         center: segment.center,
         size: segment.size,
-        rotation: 0.0,
         opacity: segment.opacity,
+        font_size: segment.font_size,
     },
     set_base: |segment, pose| {
         segment.center = pose.center;
         segment.size = pose.size;
         segment.opacity = pose.opacity;
+        segment.font_size = pose.font_size;
     },
     read: pose_at, write: write_pose_at
 );
 
-// A mask's pose opacity is its strength: how dark a highlight's surround is.
 // `motion` rather than `keyframes` because that name holds the older
 // per-property lists, which still play when `motion` is empty.
 keyframed_segment!(
-    crate::MaskSegment, LayerPose, motion,
-    base: |segment| LayerPose {
+    crate::MaskSegment, MaskPose, motion,
+    base: |segment| MaskPose {
         center: segment.center,
         size: segment.size,
-        rotation: 0.0,
-        opacity: segment.opacity as f32,
+        opacity: segment.opacity,
+        pixelation: segment.pixelation,
+        darkness: segment.darkness,
     },
     set_base: |segment, pose| {
         segment.center = pose.center;
         segment.size = pose.size;
-        segment.opacity = f64::from(pose.opacity);
+        segment.opacity = pose.opacity;
+        segment.pixelation = pose.pixelation;
+        segment.darkness = pose.darkness;
     },
     read: pose_at, write: write_pose_at
 );
@@ -594,6 +672,27 @@ macro_rules! resolved_at {
                 $(still.$clear = Default::default();)?
                 still.set_keyframe_base(value);
                 std::borrow::Cow::Owned(still)
+            }
+
+            /// Runs an edit written against the plain fields as if the
+            /// segment were still at `time`, then keeps whatever it did to
+            /// the animated ones as a keyframe there.
+            pub fn edit_at<R>(
+                &mut self,
+                time: f64,
+                tolerance: f64,
+                change: impl FnOnce(&mut Self) -> R,
+            ) -> R {
+                if self.$keys.is_empty() {
+                    return change(self);
+                }
+                let mut still = self.resolved_at(time).into_owned();
+                let result = change(&mut still);
+                let value = still.keyframe_base();
+                still.$keys = std::mem::take(&mut self.$keys);
+                *self = still;
+                self.write_pose_at(time, value, tolerance);
+                result
             }
         }
     };
@@ -914,6 +1013,35 @@ mod tests {
             json["volumeKeyframes"][1],
             serde_json::json!({ "time": 4.0, "volumeDb": -23.0, "interpolation": "smooth" })
         );
+    }
+
+    #[test]
+    fn text_size_and_mask_strength_animate_and_edits_at_a_time_become_keyframes() {
+        let mut title = crate::default_text_segment(0.0, 2.0, 0);
+        title.font_size = 40.0;
+        assert!(title.add_keyframe_at(0.0, 0.01));
+        title.edit_at(2.0, 0.01, |title| {
+            title.font_size = 80.0;
+            title.color = "#ff0000".to_string();
+        });
+        assert_eq!(title.keyframes.len(), 2);
+        assert_eq!(title.font_size, 40.0);
+        assert_eq!(title.color, "#ff0000");
+        assert!((title.pose_at(1.0).font_size - 60.0).abs() < 1e-4);
+        assert_eq!(title.resolved_at(2.0).font_size, 80.0);
+
+        let mut blur = crate::default_mask_segment(0.0, 2.0, 0);
+        let start = blur.pixelation;
+        blur.darkness = 0.0;
+        assert!(blur.add_keyframe_at(0.0, 0.01));
+        blur.edit_at(2.0, 0.01, |blur| {
+            blur.pixelation = start + 20.0;
+            blur.darkness = 1.0;
+        });
+        let middle = blur.pose_at(1.0);
+        assert!((middle.pixelation - (start + 10.0)).abs() < 1e-9);
+        assert!((middle.darkness - 0.5).abs() < 1e-9);
+        assert_eq!(blur.pixelation, start);
     }
 
     #[test]

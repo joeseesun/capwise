@@ -1201,11 +1201,11 @@ pub struct MaskSegment {
     pub fade_duration: f64,
     #[serde(default)]
     pub keyframes: MaskKeyframes,
-    /// Whole-pose keyframes. While any exist they decide `center`, `size`
-    /// and `opacity` and the older per-property `keyframes` are not read.
+    /// While any exist they decide `center`, `size`, `opacity`, `pixelation`
+    /// and `darkness`, and the older per-property `keyframes` are not read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[specta(skip)]
-    pub motion: Vec<crate::LayerKeyframe>,
+    pub motion: Vec<crate::MaskKeyframe>,
 }
 
 impl MaskSegment {
@@ -1362,11 +1362,11 @@ pub struct TextSegment {
         skip_serializing_if = "Option::is_none"
     )]
     pub title_card: Option<crate::TitleCard>,
-    /// Whole-pose keyframes. While any exist they decide `center`, `size`
-    /// and `opacity`.
+    /// While any exist they decide `center`, `size`, `opacity` and
+    /// `font_size`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[specta(skip)]
-    pub keyframes: Vec<crate::LayerKeyframe>,
+    pub keyframes: Vec<crate::TextKeyframe>,
 }
 
 impl TextSegment {
