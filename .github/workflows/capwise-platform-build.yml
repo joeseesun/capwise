@@ -36,7 +36,7 @@ jobs:
     if: inputs.linux_candidate_run == '' && inputs.mac_candidate_run == ''
     name: ${{ matrix.platform }}
     runs-on: ${{ fromJSON('{"mac-intel":"macos-15-intel","linux-x64":"ubuntu-24.04","windows-x64":"windows-2022"}')[matrix.platform] }}
-    timeout-minutes: 120
+    timeout-minutes: 210
     strategy:
       fail-fast: false
       matrix:
@@ -47,6 +47,8 @@ jobs:
       CARGO_PROFILE_RELEASE_STRIP: symbols
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: d0f7c4c140895a47ce5b27b0317e16691d5663d9
 
       - uses: actions/setup-node@v4
         with:
@@ -88,6 +90,20 @@ jobs:
         shell: bash
         run: node scripts/setup.js
 
+      - name: Build Intel Mac CLI
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.3"
+        run: cargo build --release --locked -p cap
+
+      - name: Build Intel Mac app
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.3"
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --release --locked --bin cap-gpui
+
       - name: Package Intel Mac candidate
         if: runner.os == 'macOS'
         shell: bash
@@ -104,8 +120,6 @@ jobs:
           test -s "$icon_test/AppIcon.icns"
           version="$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"/\1/p' apps/desktop-gpui/Cargo.toml)"
           export MACOSX_DEPLOYMENT_TARGET=13.3
-          cargo build --release --locked -p cap
-          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --release --locked --bin cap-gpui
           DEVELOPER_DIR="$CAPWISE_ICON_DEVELOPER_DIR" \
             apps/desktop-gpui/scripts/release.sh "$version" --dry-run --app-only --skip-build
           archive="apps/desktop-gpui/target/release-candidate/$version/Capwise_${version}_x86_64.app.tar.gz"
