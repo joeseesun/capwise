@@ -118,7 +118,7 @@ pub static SERVICES: &[AsrService] = &[
         note: tr::ai::asr::doubao::note,
         protocol: Protocol::DoubaoFlash,
         base_url: cap_utils::speech::RECOGNITION_ENDPOINT,
-        models: &["bigmodel"],
+        models: &["bigmodel", "volc.seedasr.auc", "volc.bigasr.auc_turbo"],
         key_url: Some("https://console.volcengine.com/speech/new/experience/asr"),
         needs_key: true,
         context: ContextMode::Doubao,
@@ -239,7 +239,15 @@ pub fn is_cloud_model(model: &str) -> bool {
     service(model).is_some()
 }
 
-const DOUBAO_RESOURCE: &str = "volc.bigasr.auc_turbo";
+const DOUBAO_RESOURCE_V2: &str = "volc.seedasr.auc";
+const DOUBAO_RESOURCE_LEGACY: &str = "volc.bigasr.auc_turbo";
+
+fn doubao_resource(model: &str) -> &'static str {
+    match model {
+        "volc.bigasr.auc_turbo" | "bigasr" => DOUBAO_RESOURCE_LEGACY,
+        _ => DOUBAO_RESOURCE_V2,
+    }
+}
 const DOUBAO_OK: &str = "20000000";
 const DOUBAO_SILENT: &str = "20000003";
 
@@ -555,7 +563,8 @@ async fn send_once(
     let unreadable = || Failure::Fatal(tr::asr::unreadable(name));
     let builder = match service.protocol {
         Protocol::DoubaoFlash => {
-            let mut options = json!({ "model_name": endpoint.model, "enable_itn": true, "enable_punc": true, "show_utterances": true });
+            let model_name = if endpoint.model.starts_with("volc.") { "bigmodel" } else { &endpoint.model };
+            let mut options = json!({ "model_name": model_name, "enable_itn": true, "enable_punc": true, "show_utterances": true });
             if !context.is_empty() {
                 options["corpus"] = json!({ "context": context });
             }
@@ -563,7 +572,7 @@ async fn send_once(
             client
                 .post(format!("{base}/auc/bigmodel/recognize/flash"))
                 .header("X-Api-Key", key)
-                .header("X-Api-Resource-Id", DOUBAO_RESOURCE)
+                .header("X-Api-Resource-Id", doubao_resource(&endpoint.model))
                 .header("X-Api-Request-Id", uuid::Uuid::new_v4().to_string())
                 .header("X-Api-Sequence", "-1")
                 .json(&json!({ "user": { "uid": "capwise" }, "audio": { "data": audio }, "request": options }))
@@ -1132,5 +1141,14 @@ mod tests {
         assert_eq!(service("glm").unwrap().chunk_max, 28.0);
         assert_eq!(service("mimo").unwrap().protocol, Protocol::ChatAudio);
         assert!(!service("local-server").unwrap().needs_key);
+    }
+
+    #[test]
+    fn doubao_resource_resolution() {
+        assert_eq!(doubao_resource("bigmodel"), "volc.seedasr.auc");
+        assert_eq!(doubao_resource("default"), "volc.seedasr.auc");
+        assert_eq!(doubao_resource("volc.seedasr.auc"), "volc.seedasr.auc");
+        assert_eq!(doubao_resource("volc.bigasr.auc_turbo"), "volc.bigasr.auc_turbo");
+        assert_eq!(doubao_resource("bigasr"), "volc.bigasr.auc_turbo");
     }
 }
