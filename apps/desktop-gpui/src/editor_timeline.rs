@@ -174,12 +174,12 @@ pub fn new_segment_min_duration(secs_per_pixel: f64) -> f64 {
 }
 
 /// The minimap's chip floor (`TL/Minimap.tsx:9`), the height of its hit strip
-/// and the 4px indicator drawn inside that strip, and the width it is allowed
+/// and the 8px indicator drawn inside that strip, and the width it is allowed
 /// to take in the card's bottom-right corner.
 const MINIMAP_MIN_CHIP_WIDTH: f32 = 20.;
 pub const MINIMAP_HEIGHT: f32 = 10.;
-pub const MINIMAP_BAR_HEIGHT: f32 = 4.;
-pub const MINIMAP_MAX_WIDTH: f32 = 78.;
+pub const MINIMAP_BAR_HEIGHT: f32 = 8.;
+pub const MINIMAP_MAX_WIDTH: f32 = 200.;
 
 /// The edge fade (`TL/index.tsx:1103-1106`).
 
@@ -267,9 +267,10 @@ pub(crate) fn tabular_numerals() -> gpui::FontFeatures {
 
 /// `MAX_ZOOM_IN = 3` seconds visible (`ED/context.ts:184`).
 pub const MAX_ZOOM_IN: f64 = 3.;
-/// `zoomOutLimit() = Math.min(totalDuration(), 60 * 10)` (`ED/context.ts:1387`).
+/// The zoom-out end frames the whole recording. The source's 600s cap left
+/// projects longer than ten minutes impossible to fit on screen.
 pub fn zoom_out_limit(total_duration: f64) -> f64 {
-    total_duration.min(600.)
+    total_duration
 }
 
 /// The timeline's viewport: how many seconds are visible, and which second is
@@ -4363,8 +4364,7 @@ mod tests {
     fn initial_zoom_is_the_zoom_out_limit() {
         assert_eq!(Transform::initial(15.9).zoom, 15.9);
         assert_eq!(Transform::initial(0.0).position, 0.0);
-        // `Math.min(totalDuration(), 60 * 10)`.
-        assert_eq!(Transform::initial(3_600.0).zoom, 600.0);
+        assert_eq!(Transform::initial(3_600.0).zoom, 3_600.0);
     }
 
     #[test]
@@ -4467,15 +4467,15 @@ mod tests {
         assert_eq!(wide.position, 4.);
     }
 
-    /// A project longer than the 600s zoom-out limit can still be panned to
-    /// its end: the clamp uses `max(zoomOutLimit, totalDuration)`.
+    /// A long project starts fully framed; the 4s of slack still allows
+    /// panning past its end.
     #[test]
-    fn a_long_project_can_pan_past_the_zoom_out_limit() {
+    fn a_long_project_fits_entirely_at_the_zoom_out_limit() {
         let total = 1_800.0;
         let mut transform = Transform::initial(total);
-        assert_eq!(transform.zoom, 600.);
+        assert_eq!(transform.zoom, total);
         transform.set_position(10_000., total);
-        assert_eq!(transform.position, 1_800. + 4. - 600.);
+        assert_eq!(transform.position, 4.);
     }
 
     #[test]
