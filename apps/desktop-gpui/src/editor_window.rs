@@ -13381,7 +13381,7 @@ impl EditorWindow {
                     .child(self.render_timeline_header(viewport_width, live, cx))
                     .child(self.render_timeline_body(viewport_width, cx)),
             )
-            // The minimap's 4px scroll indicator sits in the card's bottom
+            // The minimap's scroll indicator sits in the card's bottom
             // padding, under the last row rather than over it.
             .child(
                 div()
