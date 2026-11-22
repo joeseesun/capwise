@@ -3895,8 +3895,7 @@ impl MainWindow {
                         .gap(px(8.))
                         .overflow_y_scroll()
                         .child(self.render_targets(cx))
-                        .child(self.render_base_controls(cx))
-                        .child(self.render_import_video_button(cx)),
+                        .child(self.render_base_controls(cx)),
                 ),
         }
     }
@@ -3914,8 +3913,7 @@ impl MainWindow {
         )
         .label(tr::main::import_video())
         .icon("icons/import.svg")
-        .full_width()
-        .height(px(36.))
+        .height(px(24.))
         .disabled(recording)
         .on_click(cx.listener(|_, _, _, cx| {
             cx.defer(|cx| crate::import::pick_and_import_video(cx));
@@ -6699,16 +6697,26 @@ impl MainWindow {
         div()
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(px(6.))
             .w_full()
             .flex_shrink_0()
             .child(
                 div()
-                    .px(px(4.))
-                    .text_size(px(10.))
-                    .line_height(px(14.))
-                    .text_color(self.theme.gray_11)
-                    .child(tr::main::target::heading()),
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .pl(px(4.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(10.))
+                            .line_height(px(14.))
+                            .text_color(self.theme.gray_11)
+                            .child(tr::main::target::heading()),
+                    )
+                    .child(self.render_import_video_button(cx)),
             )
             .child(
                 div()
