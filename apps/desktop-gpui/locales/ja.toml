@@ -899,6 +899,7 @@ name = "録画終了時に自動で書き出す"
 [main]
 delete_recording_confirm = "この録画を削除してもよろしいですか？"
 delete_screenshot_confirm = "このスクリーンショットを削除してもよろしいですか？"
+import_video = "動画を読み込む…"
 
 [main.clean_capture]
 title = "余計なものを映さずに録画"

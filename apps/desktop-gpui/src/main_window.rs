@@ -3895,9 +3895,31 @@ impl MainWindow {
                         .gap(px(8.))
                         .overflow_y_scroll()
                         .child(self.render_targets(cx))
-                        .child(self.render_base_controls(cx)),
+                        .child(self.render_base_controls(cx))
+                        .child(self.render_import_video_button(cx)),
                 ),
         }
+    }
+
+    fn render_import_video_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        // Import ends by opening the editor, which would interrupt a running
+        // recording.
+        let recording = self.session.read(cx).phase != Phase::Idle;
+        ui::Button::plain(
+            &theme,
+            "home-import-video",
+            ui::ButtonVariant::Gray,
+            ui::ButtonSize::Sm,
+        )
+        .label(tr::main::import_video())
+        .icon("icons/import.svg")
+        .full_width()
+        .height(px(36.))
+        .disabled(recording)
+        .on_click(cx.listener(|_, _, _, cx| {
+            cx.defer(|cx| crate::import::pick_and_import_video(cx));
+        }))
     }
 
     /// The recording takeover, from index.tsx 3510-3529: an absolute overlay
@@ -4698,6 +4720,22 @@ impl MainWindow {
                     .label(kind.view_all_label())
                     .on_click(cx.listener(move |_, _, _window, cx| {
                         cx.defer(move |cx| app_windows::open_settings(page, cx));
+                    })),
+                )
+                .child(
+                    ui::Button::plain(
+                        &theme,
+                        "library-empty-import",
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Sm,
+                    )
+                    .label(kind.import_label())
+                    .icon("icons/import.svg")
+                    .on_click(cx.listener(move |_, _, _window, cx| {
+                        cx.defer(move |cx| match kind {
+                            LibraryKind::Recordings => crate::import::pick_and_import_video(cx),
+                            LibraryKind::Screenshots => crate::import::pick_and_import_image(cx),
+                        });
                     })),
                 )
             })

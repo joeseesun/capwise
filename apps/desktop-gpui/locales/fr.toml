@@ -899,6 +899,7 @@ name = "Exporter automatiquement en fin d'enregistrement"
 [main]
 delete_recording_confirm = "Voulez-vous vraiment supprimer cet enregistrement ?"
 delete_screenshot_confirm = "Voulez-vous vraiment supprimer cette capture d'écran ?"
+import_video = "Importer une vidéo…"
 
 [main.clean_capture]
 title = "Gardez votre capture propre"

@@ -899,6 +899,7 @@ name = "Nach der Aufnahme automatisch exportieren"
 [main]
 delete_recording_confirm = "Möchten Sie diese Aufnahme wirklich löschen?"
 delete_screenshot_confirm = "Möchten Sie dieses Bildschirmfoto wirklich löschen?"
+import_video = "Video importieren…"
 
 [main.clean_capture]
 title = "Halten Sie Ihre Aufnahme sauber"
