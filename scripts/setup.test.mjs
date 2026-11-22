@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
 	copyFileSync,
@@ -42,8 +43,10 @@ test(
 
 		const nativeName = "native-deps-x86_64-linux-gnu.tar.xz";
 		const onnxName = "onnxruntime-linux-x64-1.24.3.tgz";
+		const nugetName = "microsoft.ml.onnxruntime.1.24.3.nupkg";
 		const nativeUrl = `/spacedriveapp/native-deps/releases/download/v0.26/${nativeName}`;
 		const onnxUrl = `/microsoft/onnxruntime/releases/download/v1.24.3/${onnxName}`;
+		const nugetUrl = `/v3-flatcontainer/microsoft.ml.onnxruntime/1.24.3/${nugetName}`;
 		const nativeLibrary = "synthetic native library\n";
 		const onnxLibrary = "synthetic ONNX library\n";
 		const archives = new Map();
@@ -55,6 +58,22 @@ test(
 			const directory = `${archive}.contents`;
 			mkdirSync(path.dirname(path.join(directory, entry)), { recursive: true });
 			writeFileSync(path.join(directory, entry), contents);
+			if (url === nativeUrl) {
+				for (const library of [
+					"avcodec",
+					"avdevice",
+					"avfilter",
+					"avformat",
+					"avutil",
+					"swresample",
+					"swscale",
+				]) {
+					writeFileSync(
+						path.join(directory, "lib", `lib${library}.so`),
+						contents,
+					);
+				}
+			}
 			await execFile(
 				"tar",
 				[url.endsWith(".xz") ? "-cJf" : "-czf", archive, "-C", directory, "."],
@@ -94,7 +113,7 @@ test(
 			`const networkFetch = globalThis.fetch;
 globalThis.fetch = (input, options) => {
 	const url = new URL(input);
-	if (url.origin !== "https://github.com")
+	if (!["https://github.com", "https://api.nuget.org"].includes(url.origin))
 		throw new Error(\`Unexpected external request: \${url}\`);
 	return networkFetch(new URL(url.pathname, ${JSON.stringify(origin)}), options);
 };
@@ -186,5 +205,56 @@ globalThis.fetch = (input, options) => {
 				/ORT_DYLIB_PATH = .*native-deps\/onnxruntime\/lib\/libonnxruntime\.so/,
 			);
 		}
+
+		const nugetEntry = "runtimes/linux-x64/native/libonnxruntime.so";
+		mkdirSync(path.join(fixture, path.dirname(nugetEntry)), {
+			recursive: true,
+		});
+		writeFileSync(path.join(fixture, nugetEntry), onnxLibrary);
+		const nugetPath = path.join(fixture, nugetName);
+		await execFile("zip", ["-q", nugetPath, nugetEntry], {
+			cwd: fixture,
+			signal: t.signal,
+		});
+		const nugetArchive = readFileSync(nugetPath);
+		const nugetHash = createHash("sha512")
+			.update(nugetArchive)
+			.digest("base64");
+		const setupPath = path.join(fixture, "scripts/setup.js");
+		writeFileSync(
+			setupPath,
+			readFileSync(setupPath, "utf8").replace(
+				/("1\.24\.3":\s*)"[^"]+"/,
+				`$1${JSON.stringify(nugetHash)}`,
+			),
+		);
+		rmSync(path.join(fixture, "target", onnxName));
+		rmSync(path.join(fixture, "target/native-deps/onnxruntime"), {
+			recursive: true,
+		});
+		archives.delete(onnxUrl);
+		archives.set(nugetUrl, Buffer.from("invalid archive"));
+		requests.length = 0;
+		const invalidFallback = await runSetup();
+		assert.equal(invalidFallback.code, 1);
+		assert.match(invalidFallback.stderr, /sha512 mismatch/);
+		assert.deepEqual(requests, [onnxUrl, nugetUrl]);
+		assert.equal(existsSync(path.join(fixture, "target", nugetName)), false);
+
+		archives.set(nugetUrl, nugetArchive);
+		requests.length = 0;
+		const verifiedFallback = await runSetup();
+		assert.equal(verifiedFallback.code, 0, verifiedFallback.stderr);
+		assert.deepEqual(requests, [onnxUrl, nugetUrl]);
+		assert.equal(
+			readFileSync(
+				path.join(
+					fixture,
+					"target/native-deps/onnxruntime/lib/libonnxruntime.so",
+				),
+				"utf8",
+			),
+			onnxLibrary,
+		);
 	},
 );
