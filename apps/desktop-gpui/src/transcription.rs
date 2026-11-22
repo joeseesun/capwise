@@ -2735,6 +2735,49 @@ pub fn apply_caption_result(
     });
 }
 
+pub(crate) fn append_caption_result(
+    project: &mut ProjectConfiguration,
+    mut segments: Vec<CaptionSegment>,
+    recording_durations: &[f64],
+) {
+    let captions = project.captions.get_or_insert_with(|| CaptionsData {
+        settings: crate::style_presets::new_caption_settings(),
+        ..Default::default()
+    });
+    if captions.segments.is_empty()
+        && let Some(timeline) = &project.timeline
+    {
+        captions.segments = timeline
+            .caption_segments
+            .iter()
+            .map(|segment| CaptionSegment {
+                id: segment.id.clone(),
+                start: segment.start as f32,
+                end: segment.end as f32,
+                text: segment.text.clone(),
+                words: segment.words.clone(),
+            })
+            .collect();
+        captions.source_timed = false;
+    }
+    cap_project::synchronize_captions(project, recording_durations);
+    let Some(captions) = &mut project.captions else {
+        return;
+    };
+    if captions.segments.is_empty() {
+        captions.settings.enabled = true;
+    }
+    for segment in &mut segments {
+        segment.id = uuid::Uuid::new_v4().to_string();
+    }
+    captions.segments.extend(segments);
+    captions
+        .segments
+        .sort_by(|a, b| a.start.total_cmp(&b.start));
+    captions.source_timed = true;
+    cap_project::synchronize_captions(project, recording_durations);
+}
+
 /// `getCaptionGenerationErrorMessage` (`captions.ts:634-662`).
 pub fn caption_generation_error_message(message: &str) -> String {
     if message.contains("No speech detected in the audio") {
@@ -3374,6 +3417,61 @@ mod tests {
         assert_eq!(track.len(), 1);
         assert_eq!(track[0].id, "segment-0-0");
         assert_eq!(track[0].text, "hello");
+    }
+
+    #[test]
+    fn append_caption_result_preserves_edited_subtitles_and_projects_new_source_times() {
+        let mut project = ProjectConfiguration::default();
+        apply_caption_result(
+            &mut project,
+            vec![caption("cue", 0., 1., &[("edited", 0., 1.)])],
+            "en",
+            &[2.],
+            2.,
+        );
+        let old = project.timeline.as_ref().unwrap().segments[0].clone();
+        project.timeline.as_mut().unwrap().segments.extend([
+            TimelineSegment {
+                recording_clip: 1,
+                ..old.clone()
+            },
+            TimelineSegment {
+                recording_clip: 2,
+                ..old
+            },
+        ]);
+        project.captions.as_mut().unwrap().settings.set_translation(
+            "cue",
+            "edited",
+            "Edited translation".into(),
+            "en".into(),
+        );
+        append_caption_result(
+            &mut project,
+            vec![
+                caption("cue", 2., 3., &[("second", 2., 3.)]),
+                caption("cue", 4., 5., &[("third", 4., 5.)]),
+            ],
+            &[2., 2., 2.],
+        );
+        let captions = project.captions.as_ref().unwrap();
+        assert_eq!(captions.segments.len(), 3);
+        assert_eq!(captions.segments[0].id, "cue");
+        assert_eq!(
+            captions.settings.translations["cue"].text,
+            "Edited translation"
+        );
+        assert_ne!(captions.segments[1].id, "cue");
+        assert_ne!(captions.segments[1].id, captions.segments[2].id);
+        let timeline = project.timeline.as_ref().unwrap();
+        assert_eq!(
+            timeline
+                .caption_segments
+                .iter()
+                .map(|caption| caption.start)
+                .collect::<Vec<_>>(),
+            [0., 2., 4.],
+        );
     }
 
     #[test]

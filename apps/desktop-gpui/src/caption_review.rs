@@ -131,6 +131,8 @@ struct Processing {
     refinement: Option<crate::transcription::RefinementRequest>,
     #[serde(default)]
     recognition_pending: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    preserve_existing_translation_languages: bool,
     #[serde(default)]
     error: Option<String>,
 }
@@ -655,6 +657,7 @@ fn retain_current_caption_processing(
         clear_refinement: false,
         refinement: None,
         recognition_pending: false,
+        preserve_existing_translation_languages: false,
         error: Some(problem.to_string()),
     };
     let directory = path.join("caption-reviews");
@@ -1347,14 +1350,15 @@ impl EditorWindow {
     pub(crate) fn queue_caption_processing(
         &mut self,
         project: &ProjectConfiguration,
-        refinement: crate::transcription::RefinementRequest,
+        refinement: Option<crate::transcription::RefinementRequest>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let _ = processing(&self.project_path).map_err(|error| error.to_string())?;
         let settings = ReviewSettings::load();
         let workflow = crate::workflow_presets::request_for_project(&self.project_path);
         let request = Processing {
-            review: settings.enabled
+            review: refinement.is_some()
+                && settings.enabled
                 && workflow
                     .as_ref()
                     .is_none_or(|workflow| workflow.ai_caption_review),
@@ -1365,8 +1369,9 @@ impl EditorWindow {
             fingerprint: caption_fingerprint(project),
             after_save: Some(ProcessingStatus::Queued),
             before_translation_save: None,
-            clear_refinement: false,
-            refinement: Some(refinement),
+            clear_refinement: refinement.is_none(),
+            preserve_existing_translation_languages: refinement.is_none(),
+            refinement,
             recognition_pending: true,
             error: None,
         };
@@ -1449,7 +1454,7 @@ impl EditorWindow {
         if let Some(mut request) =
             processing(&self.project_path).map_err(|error| error.to_string())?
         {
-            let next = if complete {
+            let next = if complete || request.preserve_existing_translation_languages {
                 ProcessingStatus::Complete
             } else {
                 ProcessingStatus::FailedTranslation
@@ -2221,6 +2226,7 @@ impl EditorWindow {
             clear_refinement: false,
             refinement: None,
             recognition_pending: false,
+            preserve_existing_translation_languages: false,
             error: None,
         });
         if let Err(error) = self.flush_pending_saves(cx) {
@@ -2703,6 +2709,7 @@ mod tests {
             clear_refinement: false,
             refinement: None,
             recognition_pending: false,
+            preserve_existing_translation_languages: false,
             error: None,
         }
     }

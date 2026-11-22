@@ -25,7 +25,7 @@ use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraXPosition, CameraYPosition, CaptionDisplayMode,
     CaptionSettings, CaptionTextStyle, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
     KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
-    StereoMode, transcription_ranges_cover, transcription_source_ranges,
+    StereoMode, TimelineConfiguration, transcription_ranges_cover, transcription_source_ranges,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -43,6 +43,22 @@ use crate::{
     theme::Theme,
     transcription, ui,
 };
+
+fn caption_recognition_timeline(
+    timeline: Option<&TimelineConfiguration>,
+    appended_clips: &[u32],
+) -> Option<TimelineConfiguration> {
+    let mut timeline = timeline.cloned();
+    if !appended_clips.is_empty()
+        && let Some(timeline) = &mut timeline
+    {
+        timeline
+            .segments
+            .retain(|segment| appended_clips.contains(&segment.recording_clip));
+        timeline.transitions.clear();
+    }
+    timeline
+}
 
 // ---------------------------------------------------------------------------
 // Catalogues
@@ -4871,16 +4887,38 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.asset_import_busy() {
+            return;
+        }
         let Some(summary) = self.summary() else {
             return;
         };
         let recording_durations = summary.clip_display_durations.clone();
         let recording_duration = summary.recording_duration;
-        let timeline = self.project.timeline.clone();
+        let project_path = self.project_path.clone();
+        let appended_clips = if automatic {
+            crate::recording_autocaptions::pending_appended_clips(&project_path)
+        } else {
+            Vec::new()
+        };
+        let append = !appended_clips.is_empty();
+        let timeline =
+            caption_recognition_timeline(self.project.timeline.as_ref(), &appended_clips);
         let transcribed_ranges =
             transcription_source_ranges(timeline.as_ref(), &recording_durations);
-        let project_path = self.project_path.clone();
         if !transcription::begin_generation(&project_path) {
+            return;
+        }
+        if append && (timeline.is_none() || transcribed_ranges.is_empty()) {
+            if let Err(error) = crate::recording_autocaptions::finish_generation_outcome(
+                &project_path,
+                automatic,
+                Ok(false),
+            ) {
+                self.caption_processing_save_failed(error, cx);
+            }
+            self.invalidate_sidebar(cx);
+            cx.notify();
             return;
         }
         self.cancel_caption_processing(cx);
@@ -4937,7 +4975,10 @@ impl EditorWindow {
                             return Ok(false);
                         };
                         this.commit_caption_drafts(window, cx);
-                        if automatic && crate::recording_autocaptions::has_captions(&this.project) {
+                        if automatic
+                            && !append
+                            && crate::recording_autocaptions::has_captions(&this.project)
+                        {
                             return Ok(false);
                         }
                         if crate::caption_review::caption_content_snapshot(&this.project)
@@ -4945,8 +4986,16 @@ impl EditorWindow {
                         {
                             return Err(tr::editor::review::changed().to_string());
                         }
+                        let scoped_timeline = if append {
+                            caption_recognition_timeline(
+                                this.project.timeline.as_ref(),
+                                &appended_clips,
+                            )
+                        } else {
+                            None
+                        };
                         let current_ranges = transcription_source_ranges(
-                            this.project.timeline.as_ref(),
+                            scoped_timeline.as_ref().or(this.project.timeline.as_ref()),
                             &recording_durations,
                         );
                         if !transcription_ranges_cover(&transcribed_ranges, &current_ranges) {
@@ -4960,7 +5009,7 @@ impl EditorWindow {
                             transcript,
                             &recording_durations,
                             recording_duration,
-                            show_captions,
+                            (show_captions, append),
                             window,
                             cx,
                         )?;
@@ -4975,6 +5024,9 @@ impl EditorWindow {
                         Err(tr::editor::tabs::captions::auto_draft::interrupted().to_string())
                     }),
                 Ok(None) => Ok(false),
+                Err(error) if append && error.contains("No speech detected in the audio") => {
+                    Ok(false)
+                }
                 Err(error) => Err(error),
             };
             let outcome = crate::recording_autocaptions::finish_generation_outcome(
@@ -5178,7 +5230,7 @@ impl EditorWindow {
         transcript: transcription::Transcript,
         recording_durations: &[f64],
         recording_duration: f64,
-        show_captions: bool,
+        (show_captions, append): (bool, bool),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
@@ -5192,22 +5244,27 @@ impl EditorWindow {
             .as_ref()
             .is_some_and(|captions| captions.settings.enabled);
         crate::style_presets::seed_default_captions(&mut next);
-        transcription::apply_caption_result(
-            &mut next,
-            segments,
-            &refinement.language,
-            recording_durations,
-            recording_duration,
-        );
+        if append {
+            transcription::append_caption_result(&mut next, segments, recording_durations);
+        } else {
+            transcription::apply_caption_result(
+                &mut next,
+                segments,
+                &refinement.language,
+                recording_durations,
+                recording_duration,
+            );
+        }
         if !show_captions && let Some(captions) = next.captions.as_mut() {
             captions.settings.enabled = shown;
         }
-        if let Some(captions) = next.captions.as_mut()
+        if !append
+            && let Some(captions) = next.captions.as_mut()
             && let Some(font) = chinese_caption_font(&captions.settings.font, &captions.segments)
         {
             captions.settings.set_source_font(font.to_string());
         }
-        self.queue_caption_processing(&next, refinement, cx)?;
+        self.queue_caption_processing(&next, (!append).then_some(refinement), cx)?;
         self.edit_project_global("caption-generate", window, cx, move |project| {
             *project = next;
             true
@@ -5215,7 +5272,9 @@ impl EditorWindow {
         if show_captions {
             self.tracks.caption = true;
         }
-        self.resplit_captions(true, window, cx);
+        if !append {
+            self.resplit_captions(true, window, cx);
+        }
         cx.notify();
         Ok(())
     }
