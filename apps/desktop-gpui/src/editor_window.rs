@@ -13381,7 +13381,7 @@ impl EditorWindow {
                     .child(self.render_timeline_header(viewport_width, live, cx))
                     .child(self.render_timeline_body(viewport_width, cx)),
             )
-            // The minimap's 4px scroll indicator sits in the card's bottom
+            // The minimap's scroll indicator sits in the card's bottom
             // padding, under the last row rather than over it.
             .child(
                 div()
@@ -14447,11 +14447,6 @@ impl Render for EditorWindow {
             self.preferred_timeline_height(),
         );
 
-        // `onMount`'s `checkBounds` (`TL/index.tsx:689-703`): once the
-        // timeline has a width, zoom in until a segment would be at least
-        // 80px. The source retries every 10ms until the bounds exist; here the
-        // first render that knows both the width and a duration is that
-        // moment, and `fitted` makes it once-only exactly as the mount hook is.
         if !self.fitted && self.total_duration() > 0.0 {
             self.fitted = true;
             let total = self.total_duration();
