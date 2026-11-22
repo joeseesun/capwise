@@ -395,8 +395,6 @@ async function main() {
 	);
 }
 
-main();
-
 async function trimMacOSFramework(frameworkDir) {
 	const headersDir = path.join(frameworkDir, "Headers");
 	const librariesDir = path.join(frameworkDir, "Libraries");
@@ -465,19 +463,72 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 		);
 }
 
+const onnxRuntimeNuGetHashes = {
+	"1.23.2":
+		"sVAnmG5xfi4JW7YU70jY6z4kSWaCt39tnyRHnqy7QlLIHA4RZ+mBBnzKUKAjhJYyTyPDPy92Wui7MY/kFgs2mA==",
+	"1.24.2":
+		"drZ8ja/CPE8grQljcFfCAh9KhzcBgmzsnidKBKIBetEUM4eSdaCR+aHVmXqa6n+7dYm0nQNgKLGTthaPmdn0YA==",
+	"1.24.3":
+		"brjMic9KUW3XnGlHlDfc2M6RMqUI3Ykzp6pugj+LeidN08GyWPqXUGgSyRk4UdJ6tEMy9+i0AlHqVwNNkdCynA==",
+};
+
+async function extractOnnxRuntime({ version, name, runtime }, extractDir) {
+	const archivePath = path.join(targetDir, name);
+	const url = `https://github.com/microsoft/onnxruntime/releases/download/v${version}/${name}`;
+	const windows = process.platform === "win32";
+	await fs.rm(extractDir, { recursive: true, force: true });
+
+	if (!(await fileExists(archivePath))) {
+		try {
+			console.log(`Downloading ${name}`);
+			await fs.writeFile(archivePath, Buffer.from(await downloadBytes(url)));
+		} catch (error) {
+			if (!(error instanceof DownloadError) || error.status !== 404)
+				throw error;
+			const packageName = `microsoft.ml.onnxruntime.${version}.nupkg`;
+			const nugetPath = await downloadVerifiedAsset({
+				name: packageName,
+				url: `https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${version}/${packageName}`,
+				sha512: onnxRuntimeNuGetHashes[version],
+			});
+			const directory = `runtimes/${runtime}/native`;
+			await fs.mkdir(extractDir, { recursive: true });
+			if (windows) {
+				await extractWindowsArchive(nugetPath, extractDir, directory);
+			} else {
+				await execFile("unzip", [
+					"-q",
+					nugetPath,
+					`${directory}/*`,
+					"-d",
+					extractDir,
+				]);
+			}
+			await fs.rename(
+				path.join(extractDir, directory),
+				path.join(extractDir, "lib"),
+			);
+			return;
+		}
+	} else console.log(`Using cached ${name}`);
+
+	if (windows) await extractWindowsArchive(archivePath, targetDir);
+	else await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+}
+
 async function setupMacOSOnnxRuntime() {
 	const asset =
 		arch === "aarch64"
 			? {
 					version: "1.24.2",
 					name: "onnxruntime-osx-arm64-1.24.2.tgz",
+					runtime: "osx-arm64",
 				}
 			: {
 					version: "1.23.2",
 					name: "onnxruntime-osx-x86_64-1.23.2.tgz",
+					runtime: "osx-x64",
 				};
-	const url = `https://github.com/microsoft/onnxruntime/releases/download/v${asset.version}/${asset.name}`;
-	const archivePath = path.join(targetDir, asset.name);
 	const extractDir = path.join(targetDir, asset.name.replace(/\.tgz$/, ""));
 	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
 	const outputPath = path.join(outputDir, "libonnxruntime.dylib");
@@ -487,16 +538,8 @@ async function setupMacOSOnnxRuntime() {
 		.then((value) => value.trim())
 		.catch(() => null);
 
-	if (!(await fileExists(archivePath))) {
-		console.log(`Downloading ${asset.name}`);
-		const bytes = await downloadBytes(url);
-		await fs.writeFile(archivePath, Buffer.from(bytes));
-		console.log(`Downloaded ${asset.name}`);
-	} else console.log(`Using cached ${asset.name}`);
-
 	if (!(await fileExists(outputPath)) || marker !== asset.name) {
-		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+		await extractOnnxRuntime(asset, extractDir);
 		await fs.mkdir(outputDir, { recursive: true });
 		await fs.copyFile(
 			path.join(extractDir, "lib", "libonnxruntime.dylib"),
@@ -518,18 +561,18 @@ async function setupWindowsOnnxRuntime() {
 		x86_64: {
 			version: "1.24.2",
 			name: "onnxruntime-win-x64-1.24.2.zip",
+			runtime: "win-x64",
 		},
 		aarch64: {
 			version: "1.24.2",
 			name: "onnxruntime-win-arm64-1.24.2.zip",
+			runtime: "win-arm64",
 		},
 	};
 	const asset = assets[arch];
 	if (!asset)
 		throw new Error(`Unsupported Windows arch for ONNX Runtime: ${arch}`);
 
-	const url = `https://github.com/microsoft/onnxruntime/releases/download/v${asset.version}/${asset.name}`;
-	const archivePath = path.join(targetDir, asset.name);
 	const extractDir = path.join(targetDir, asset.name.replace(/\.zip$/, ""));
 	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
 	const outputPath = path.join(outputDir, "onnxruntime.dll");
@@ -539,16 +582,8 @@ async function setupWindowsOnnxRuntime() {
 		.then((value) => value.trim())
 		.catch(() => null);
 
-	if (!(await fileExists(archivePath))) {
-		console.log(`Downloading ${asset.name}`);
-		const bytes = await downloadBytes(url);
-		await fs.writeFile(archivePath, Buffer.from(bytes));
-		console.log(`Downloaded ${asset.name}`);
-	} else console.log(`Using cached ${asset.name}`);
-
 	if (!(await fileExists(outputPath)) || marker !== asset.name) {
-		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await extractWindowsArchive(archivePath, targetDir);
+		await extractOnnxRuntime(asset, extractDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		const libDir = path.join(extractDir, "lib");
@@ -589,7 +624,6 @@ async function setupLinuxOnnxRuntime() {
 		throw new Error(`Unsupported Linux arch for ONNX Runtime: ${arch}`);
 
 	const archiveName = `onnxruntime-linux-${platformArch}-${version}.tgz`;
-	const archivePath = path.join(targetDir, archiveName);
 	const extractDir = path.join(targetDir, archiveName.replace(/\.tgz$/, ""));
 	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
 	const outputPath = path.join(outputDir, "libonnxruntime.so");
@@ -599,21 +633,15 @@ async function setupLinuxOnnxRuntime() {
 		.then((value) => value.trim())
 		.catch(() => null);
 
-	if (!(await fileExists(archivePath))) {
-		const response = await fetch(
-			`https://github.com/microsoft/onnxruntime/releases/download/v${version}/${archiveName}`,
-		);
-		if (!response.ok)
-			throw new Error(
-				`Failed to download ${archiveName}: HTTP ${response.status}`,
-			);
-		await fs.writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
-		console.log(`Downloaded ${archiveName}`);
-	} else console.log(`Using cached ${archiveName}`);
-
 	if (!(await fileExists(outputPath)) || marker !== archiveName) {
-		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+		await extractOnnxRuntime(
+			{
+				version,
+				name: archiveName,
+				runtime: `linux-${platformArch === "aarch64" ? "arm64" : platformArch}`,
+			},
+			extractDir,
+		);
 		await fs.mkdir(outputDir, { recursive: true });
 		await fs.copyFile(
 			path.join(extractDir, "lib", "libonnxruntime.so"),
@@ -749,32 +777,34 @@ async function setupWindowsLibclang(vcInstallDir) {
 	return fallbackLibclang;
 }
 
-/** @param {string} archivePath @param {string} destination */
-async function extractWindowsArchive(archivePath, destination) {
+/** @param {string} archivePath @param {string} destination @param {...string} entries */
+async function extractWindowsArchive(archivePath, destination, ...entries) {
 	await fs.mkdir(destination, { recursive: true });
 	const tar = path.join(env.SystemRoot ?? "C:/Windows", "System32", "tar.exe");
-	await execFile(tar, ["-xf", archivePath, "-C", destination]);
+	await execFile(tar, ["-xf", archivePath, "-C", destination, ...entries]);
 }
 
+/** @param {{name: string, url: string, sha256?: string, sha512?: string}} asset */
 async function downloadVerifiedAsset(asset) {
 	const archivePath = path.join(targetDir, asset.name);
 	if (!(await fileExists(archivePath))) {
-		const response = await fetch(asset.url);
-		if (!response.ok)
-			throw new Error(
-				`Failed to download ${asset.name}: HTTP ${response.status}`,
-			);
-		await fs.writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
+		await fs.writeFile(
+			archivePath,
+			Buffer.from(await downloadBytes(asset.url)),
+		);
 		console.log(`Downloaded ${asset.name}`);
 	} else console.log(`Using cached ${asset.name}`);
 
-	const actualHash = createHash("sha256")
+	const algorithm = asset.sha512 ? "sha512" : "sha256";
+	const encoding = asset.sha512 ? "base64" : "hex";
+	const expectedHash = asset.sha512 ?? asset.sha256;
+	const actualHash = createHash(algorithm)
 		.update(await fs.readFile(archivePath))
-		.digest("hex");
-	if (actualHash !== asset.sha256) {
+		.digest(encoding);
+	if (actualHash !== expectedHash) {
 		await fs.rm(archivePath, { force: true });
 		throw new Error(
-			`${asset.name} SHA-256 mismatch: got ${actualHash}, expected ${asset.sha256}; removed invalid cached archive`,
+			`${asset.name} ${algorithm} mismatch: got ${actualHash}, expected ${expectedHash}; removed invalid cached archive`,
 		);
 	}
 
@@ -799,12 +829,18 @@ async function signMacOSDylib(filePath) {
 	);
 }
 
+class DownloadError extends Error {
+	constructor(url, status) {
+		super(`Failed to download ${url}: HTTP ${status}`);
+		this.status = status;
+	}
+}
+
 async function downloadBytes(url) {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			const response = await fetch(url);
-			if (!response.ok)
-				throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
+			if (!response.ok) throw new DownloadError(url, response.status);
 			return await response.arrayBuffer();
 		} catch (error) {
 			const cause = error instanceof Error ? error.cause : undefined;
@@ -1003,3 +1039,5 @@ async function canUseSccache(sccachePath) {
 		await fs.rm(probeDir, { recursive: true, force: true });
 	}
 }
+
+main();
