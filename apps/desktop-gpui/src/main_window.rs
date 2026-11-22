@@ -3660,7 +3660,7 @@ impl MainWindow {
                 .when(id != "teleprompter", |button| button.w(px(20.)))
                 .when(id == "teleprompter", |button| {
                     button
-                        .px(px(5.))
+                        .px(px(2.))
                         .gap(px(3.))
                         .text_size(px(11.))
                         .when(teleprompter_active, |button| button.bg(theme.gray_4))
@@ -3713,7 +3713,7 @@ impl MainWindow {
                     .gap(px(4.))
                     .flex_shrink_0()
                     .child(
-                        icon_button("home-import-video", "icons/import.svg", 16.)
+                        icon_button("home-import-video", "icons/download.svg", 16.)
                             .tab_stop(import_available)
                             .when(!import_available, |button| button.opacity(0.5))
                             .when(import_available, |button| {
@@ -3741,7 +3741,7 @@ impl MainWindow {
                             } else {
                                 "icons/scan-text.svg"
                             },
-                            14.,
+                            16.,
                         )
                         .child(tr::settings::teleprompter::launcher())
                         .on_click(
