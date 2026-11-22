@@ -3900,6 +3900,26 @@ impl MainWindow {
         }
     }
 
+    fn render_import_video_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        // Import ends by opening the editor, which would interrupt a running
+        // recording.
+        let recording = self.session.read(cx).phase != Phase::Idle;
+        ui::Button::plain(
+            &theme,
+            "home-import-video",
+            ui::ButtonVariant::Gray,
+            ui::ButtonSize::Sm,
+        )
+        .label(tr::main::import_video())
+        .icon("icons/import.svg")
+        .height(px(24.))
+        .disabled(recording)
+        .on_click(cx.listener(|_, _, _, cx| {
+            cx.defer(|cx| crate::import::pick_and_import_video(cx));
+        }))
+    }
+
     /// The recording takeover, from index.tsx 3510-3529: an absolute overlay
     /// (`bg-gray-1/80 backdrop-blur-xs` -- the blur is skipped here, this gpui
     /// rev has no per-element backdrop blur hook) with the Stop button pinned
@@ -4698,6 +4718,22 @@ impl MainWindow {
                     .label(kind.view_all_label())
                     .on_click(cx.listener(move |_, _, _window, cx| {
                         cx.defer(move |cx| app_windows::open_settings(page, cx));
+                    })),
+                )
+                .child(
+                    ui::Button::plain(
+                        &theme,
+                        "library-empty-import",
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Sm,
+                    )
+                    .label(kind.import_label())
+                    .icon("icons/import.svg")
+                    .on_click(cx.listener(move |_, _, _window, cx| {
+                        cx.defer(move |cx| match kind {
+                            LibraryKind::Recordings => crate::import::pick_and_import_video(cx),
+                            LibraryKind::Screenshots => crate::import::pick_and_import_image(cx),
+                        });
                     })),
                 )
             })
@@ -6661,16 +6697,26 @@ impl MainWindow {
         div()
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(px(6.))
             .w_full()
             .flex_shrink_0()
             .child(
                 div()
-                    .px(px(4.))
-                    .text_size(px(10.))
-                    .line_height(px(14.))
-                    .text_color(self.theme.gray_11)
-                    .child(tr::main::target::heading()),
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .pl(px(4.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(10.))
+                            .line_height(px(14.))
+                            .text_color(self.theme.gray_11)
+                            .child(tr::main::target::heading()),
+                    )
+                    .child(self.render_import_video_button(cx)),
             )
             .child(
                 div()
