@@ -62,6 +62,10 @@ impl TranslationUi {
         self.running
     }
 
+    pub(crate) fn is_updating(&self) -> bool {
+        self.auto_busy
+    }
+
     pub(crate) fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
@@ -202,15 +206,16 @@ fn apply_translation_updates(
     changed
 }
 
-fn english_translation_plan(
+fn automatic_translation_plan(
     settings: &cap_project::CaptionSettings,
     source: &[Source],
+    language: &str,
 ) -> (Vec<Source>, bool) {
     let mut requested = Vec::new();
     let mut kept_other_languages = false;
     for item in source {
         if existing_translation(settings, item)
-            .is_some_and(|translation| !translation.language.eq_ignore_ascii_case("en"))
+            .is_some_and(|translation| !translation.language.eq_ignore_ascii_case(language))
         {
             kept_other_languages = true;
         } else if settings.translation_for(&item.id, &item.text).is_none() {
@@ -1284,12 +1289,12 @@ impl EditorWindow {
             return;
         }
         self.sidebar.caption_translation.language = language_index(language);
-        self.translate_captions_with_mode(window, cx, true);
+        self.translate_captions_with_mode(window, cx, Some(language));
     }
 
     fn translate_captions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_caption_export_wait(cx);
-        self.translate_captions_with_mode(window, cx, false);
+        self.translate_captions_with_mode(window, cx, None);
     }
 
     pub(crate) fn cancel_caption_translation(&mut self, cx: &mut Context<Self>) {
@@ -1310,7 +1315,7 @@ impl EditorWindow {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        automatic: bool,
+        automatic_language: Option<&str>,
     ) {
         let transcription = crate::transcription::ui_snapshot(&self.project_path);
         if self.sidebar.caption_translation.running
@@ -1321,11 +1326,11 @@ impl EditorWindow {
             return;
         }
         let settings = crate::editor_tabs::caption_settings(&self.project);
-        let language = if automatic {
-            "en".to_string()
-        } else {
-            self.sidebar.caption_translation.target_language(cx)
-        };
+        let automatic = automatic_language.is_some();
+        let language = automatic_language.map_or_else(
+            || self.sidebar.caption_translation.target_language(cx),
+            str::to_string,
+        );
         self.sidebar.caption_translation.error = None;
         if language.is_empty() || language.chars().count() > 80 {
             self.sidebar.caption_translation.error =
@@ -1335,7 +1340,7 @@ impl EditorWindow {
         }
         let initial_source = sources(&self.translation_segments(), &settings);
         let (source, kept_other_languages) = if automatic {
-            english_translation_plan(&settings, &initial_source)
+            automatic_translation_plan(&settings, &initial_source, &language)
         } else {
             (
                 initial_source
@@ -1757,7 +1762,8 @@ mod tests {
         settings.set_translation("e", "旧文本", "이전 번역".into(), "ko".into());
         settings.set_translation("unrelated", "其他内容", "Unrelated".into(), "en".into());
         let before = settings.translations.clone();
-        let (requested, kept_other_languages) = english_translation_plan(&settings, &source);
+        let (requested, kept_other_languages) =
+            automatic_translation_plan(&settings, &source, "en");
         assert!(kept_other_languages);
         assert_eq!(
             requested
@@ -1791,16 +1797,39 @@ mod tests {
             "Click the button"
         );
         assert_eq!(settings.translation_for("c", "保存").unwrap().text, "Save");
-        assert!(english_translation_plan(settings, &source).0.is_empty());
+        assert!(
+            automatic_translation_plan(settings, &source, "en")
+                .0
+                .is_empty()
+        );
     }
 
     #[test]
     fn unrelated_history_does_not_block_new_english_translations() {
         let mut settings = cap_project::CaptionSettings::default();
         settings.set_translation("old", "旧项目内容", "以前の字幕".into(), "ja".into());
-        let (requested, kept_other_languages) = english_translation_plan(&settings, &source());
+        let (requested, kept_other_languages) =
+            automatic_translation_plan(&settings, &source(), "en");
         assert_eq!(requested, source());
         assert!(!kept_other_languages);
+    }
+
+    #[test]
+    fn automatic_translation_uses_the_workflow_language_for_new_captions() {
+        let source = source();
+        let mut settings = CaptionSettings::default();
+        settings.set_translation("a", "你好", "こんにちは".into(), "ja".into());
+        let (requested, kept_other_languages) =
+            automatic_translation_plan(&settings, &source, "ja");
+        assert_eq!(requested, source[1..]);
+        assert!(!kept_other_languages);
+        assert_eq!(
+            translation_batches("ja", &requested)
+                .next()
+                .unwrap()
+                .language,
+            "ja"
+        );
     }
 
     #[test]

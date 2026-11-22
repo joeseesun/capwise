@@ -31,11 +31,22 @@ pub(crate) enum Request {
     CaptionSnapshot,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredRequest {
+    #[serde(flatten)]
+    request: Request,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    appended_clips: Vec<u32>,
+}
+
 fn decode_request(bytes: &[u8]) -> Result<Request, String> {
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     if value.get("state").is_some() {
-        return serde_json::from_value(value).map_err(|error| error.to_string());
+        return serde_json::from_value::<StoredRequest>(value)
+            .map(|stored| stored.request)
+            .map_err(|error| error.to_string());
     }
     let object = value
         .as_object()
@@ -120,6 +131,21 @@ pub(crate) fn complete_saved_recognition(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn write(path: &Path, request: &Request) -> Result<(), String> {
+    let appended_clips = match request {
+        Request::Complete | Request::Skipped => Vec::new(),
+        _ => pending_appended_clips(path),
+    };
+    write_scoped(path, request, appended_clips)
+}
+
+pub(crate) fn pending_appended_clips(path: &Path) -> Vec<u32> {
+    std::fs::read(path.join(REQUEST_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<StoredRequest>(&bytes).ok())
+        .map_or_else(Vec::new, |stored| stored.appended_clips)
+}
+
+fn write_scoped(path: &Path, request: &Request, appended_clips: Vec<u32>) -> Result<(), String> {
     match std::fs::read(path.join(REQUEST_FILE)) {
         Ok(previous) if serde_json::from_slice::<Request>(&previous).is_err() => {
             let directory = path.join("caption-reviews");
@@ -138,7 +164,11 @@ pub(crate) fn write(path: &Path, request: &Request) -> Result<(), String> {
     let staging = path.join(format!(".auto-captions-{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut file = std::fs::File::create_new(&staging).map_err(|error| error.to_string())?;
-        serde_json::to_writer(&mut file, request).map_err(|error| error.to_string())?;
+        let stored = StoredRequest {
+            request: request.clone(),
+            appended_clips,
+        };
+        serde_json::to_writer(&mut file, &stored).map_err(|error| error.to_string())?;
         file.flush().map_err(|error| error.to_string())?;
         file.sync_all().map_err(|error| error.to_string())?;
         drop(file);
@@ -328,6 +358,30 @@ pub(crate) fn enqueue(
     Ok(())
 }
 
+pub(crate) fn enqueue_appended(
+    path: &Path,
+    clips: impl Iterator<Item = u32>,
+    project: &ProjectConfiguration,
+) -> Result<(), String> {
+    let previous = read_checked(path)?;
+    if matches!(previous, Some(Request::Skipped | Request::CaptionSnapshot)) {
+        return Ok(());
+    }
+    let mut appended_clips = pending_appended_clips(path);
+    let full_project_pending = appended_clips.is_empty()
+        && !has_captions(project)
+        && matches!(
+            previous,
+            Some(Request::Queued | Request::NeedsModel | Request::Failed { .. })
+        );
+    if !full_project_pending {
+        appended_clips.extend(clips);
+        appended_clips.sort_unstable();
+        appended_clips.dedup();
+    }
+    write_scoped(path, &Request::Queued, appended_clips)
+}
+
 fn choose_model(preferred: &str, ready: impl Fn(&str) -> bool) -> Option<&'static str> {
     let models = [crate::local_qwen::MODEL, "medium", "small"];
     models
@@ -344,6 +398,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.asset_import_busy() {
+            return;
+        }
         if crate::recording_setup::pending(&self.project_path) {
             self.show_recording_setup(cx);
             return;
@@ -363,7 +420,9 @@ impl EditorWindow {
         {
             return;
         }
-        let next = if has_captions(&self.project) {
+        let next = if has_captions(&self.project)
+            && pending_appended_clips(&self.project_path).is_empty()
+        {
             Some(Request::Complete)
         } else if !crate::store::GeneralSettings::load().auto_captions_after_recording {
             Some(Request::Skipped)
@@ -705,6 +764,25 @@ mod tests {
             choose_model("small", |model| model == "medium"),
             Some("medium")
         );
+    }
+
+    #[test]
+    fn appended_capture_keeps_pending_clip_ids_until_recognition_is_saved() {
+        let dir = fixture(true);
+        let path = dir.path();
+        let project = ProjectConfiguration::default();
+        write(path, &Request::Complete).unwrap();
+        enqueue_appended(path, 2..3, &project).unwrap();
+        write(path, &Request::NeedsModel).unwrap();
+        enqueue_appended(path, 4..6, &project).unwrap();
+        assert_eq!(read_checked(path).unwrap(), Some(Request::Queued));
+        assert_eq!(pending_appended_clips(path), [2, 4, 5]);
+        start_request(path, "small").unwrap();
+        assert_eq!(pending_appended_clips(path), [2, 4, 5]);
+        complete_saved_recognition(path).unwrap();
+        assert_eq!(read_checked(path).unwrap(), Some(Request::Complete));
+        assert!(pending_appended_clips(path).is_empty());
+        assert!(finish_generation_outcome(path, true, Ok(true)).unwrap());
     }
 
     #[test]

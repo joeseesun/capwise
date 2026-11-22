@@ -23,6 +23,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
+    time::Duration,
 };
 
 use cap_project::{
@@ -1713,7 +1714,7 @@ impl EditorWindow {
     pub(crate) fn append_recorded_clip(
         &mut self,
         recording_dir: PathBuf,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !self.project_ready() {
@@ -1735,34 +1736,52 @@ impl EditorWindow {
         if self.playing {
             self.stop_playback(cx);
         }
-        self.pending_save().borrow_mut().flush();
-        if let Err(error) = self.project.write(&self.project_path) {
-            tracing::error!("failed to persist the project config before append: {error}");
-        }
+        self.commit_caption_drafts(window, cx);
         self.clips.importing = true;
         cx.notify();
 
         let target = self.project_path.clone();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn({
-                    let target = target.clone();
-                    let recording_dir = recording_dir.clone();
-                    async move {
-                        let count = append_cap_project_to_editor(&target, &recording_dir)?;
-                        if let Err(error) =
-                            crate::recording::delete_recording_directory(&recording_dir)
-                        {
-                            tracing::warn!(
-                                recording = %recording_dir.display(),
-                                "could not delete the appended recording: {error}"
-                            );
-                        }
-                        Ok::<usize, String>(count)
-                    }
-                })
-                .await;
+            while let Ok(true) = this.update(cx, |this, _| {
+                let state = crate::transcription::ui_snapshot(&this.project_path);
+                state.generating
+                    || state.refining
+                    || this.sidebar.caption_review.is_running()
+                    || this.sidebar.caption_translation.is_running()
+                    || this.sidebar.caption_translation.is_updating()
+                    || this.sidebar.caption_resplit.running
+            }) {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+            }
+            let Ok(result) = this.update(cx, |this, cx| this.flush_pending_saves(cx)) else {
+                return;
+            };
+            let result = match result {
+                Ok(()) => {
+                    cx.background_executor()
+                        .spawn({
+                            let target = target.clone();
+                            let recording_dir = recording_dir.clone();
+                            async move {
+                                let count =
+                                    append_cap_project_to_editor(&target, &recording_dir, true)?;
+                                if let Err(error) =
+                                    crate::recording::delete_recording_directory(&recording_dir)
+                                {
+                                    tracing::warn!(
+                                        recording = %recording_dir.display(),
+                                        "could not delete the appended recording: {error}"
+                                    );
+                                }
+                                Ok::<usize, String>(count)
+                            }
+                        })
+                        .await
+                }
+                Err(error) => Err(error),
+            };
             match result {
                 Ok(count) => {
                     tracing::info!(
@@ -2109,7 +2128,7 @@ impl EditorWindow {
                     let target = target.clone();
                     async move {
                         let _in_flight = in_flight;
-                        append_cap_project_to_editor(&target, &source)
+                        append_cap_project_to_editor(&target, &source, false)
                     }
                 })
                 .await;
@@ -3955,6 +3974,7 @@ fn copy_source_segment(
 pub(crate) fn append_cap_project_to_editor(
     target_project_path: &Path,
     source_path: &Path,
+    recorded_in_editor: bool,
 ) -> Result<usize, String> {
     if same_project_path(target_project_path, source_path) {
         return Err(tr::editor::clips::error::into_itself().to_string());
@@ -4083,6 +4103,27 @@ pub(crate) fn append_cap_project_to_editor(
     config
         .normalize_title_cards()
         .map_err(|error| crate::editor_title_cards::card_error_message(&error))?;
+
+    if recorded_in_editor
+        && crate::store::GeneralSettings::load().auto_captions_after_recording
+        && copied_segments
+            .iter()
+            .any(|segment| segment.mic.is_some() || segment.usable_system_audio().is_some())
+    {
+        use crate::workflow_presets;
+
+        if workflow_presets::request_for_project_checked(target_project_path)?.is_none()
+            && let Some(workflow) = workflow_presets::request_for_project_checked(source_path)?
+        {
+            workflow_presets::save_request(target_project_path, &workflow)
+                .map_err(|error| error.to_string())?;
+        }
+        crate::recording_autocaptions::enqueue_appended(
+            target_project_path,
+            base_index..base_index + copied_segments.len() as u32,
+            &config,
+        )?;
+    }
 
     target_meta
         .save_for_project()
@@ -4539,7 +4580,7 @@ mod tests {
             .unwrap();
         project.write(&target.project).unwrap();
         assert_eq!(
-            append_cap_project_to_editor(&target.project, &source).unwrap(),
+            append_cap_project_to_editor(&target.project, &source, false).unwrap(),
             1
         );
         let result = ProjectConfiguration::load(&target.project).unwrap();
