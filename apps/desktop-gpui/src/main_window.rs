@@ -3627,6 +3627,7 @@ impl MainWindow {
         let theme = self.theme;
         let keyboard_nav = self.keyboard_nav;
         let teleprompter_active = app_windows::launcher_teleprompter_active(cx);
+        let import_available = self.session.read(cx).phase == Phase::Idle;
 
         // `IconButton::header`: a 20px hit box with no fill, `text-gray-11`
         // going to `text-gray-12` on hover.
@@ -3636,6 +3637,7 @@ impl MainWindow {
                 "settings" => tr::main::header::settings(),
                 "screenshots" => tr::main::header::screenshots(),
                 "recordings" => tr::main::header::recordings(),
+                "home-import-video" => tr::main::import_video(),
                 "teleprompter" if teleprompter_active => {
                     tr::settings::teleprompter::launcher_active()
                 }
@@ -3710,6 +3712,16 @@ impl MainWindow {
                     .items_center()
                     .gap(px(4.))
                     .flex_shrink_0()
+                    .child(
+                        icon_button("home-import-video", "icons/import.svg", 16.)
+                            .tab_stop(import_available)
+                            .when(!import_available, |button| button.opacity(0.5))
+                            .when(import_available, |button| {
+                                button.on_click(cx.listener(|_, _, _, cx| {
+                                    cx.defer(|cx| crate::import::pick_and_import_video(cx));
+                                }))
+                            }),
+                    )
                     .child(
                         icon_button("recordings", "icons/history.svg", 16.).on_click(cx.listener(
                             |this, _, window, cx| {
@@ -3898,26 +3910,6 @@ impl MainWindow {
                         .child(self.render_base_controls(cx)),
                 ),
         }
-    }
-
-    fn render_import_video_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        // Import ends by opening the editor, which would interrupt a running
-        // recording.
-        let recording = self.session.read(cx).phase != Phase::Idle;
-        ui::Button::plain(
-            &theme,
-            "home-import-video",
-            ui::ButtonVariant::Gray,
-            ui::ButtonSize::Sm,
-        )
-        .label(tr::main::import_video())
-        .icon("icons/import.svg")
-        .height(px(24.))
-        .disabled(recording)
-        .on_click(cx.listener(|_, _, _, cx| {
-            cx.defer(|cx| crate::import::pick_and_import_video(cx));
-        }))
     }
 
     /// The recording takeover, from index.tsx 3510-3529: an absolute overlay
@@ -6697,26 +6689,16 @@ impl MainWindow {
         div()
             .flex()
             .flex_col()
-            .gap(px(6.))
+            .gap(px(8.))
             .w_full()
             .flex_shrink_0()
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .pl(px(4.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(10.))
-                            .line_height(px(14.))
-                            .text_color(self.theme.gray_11)
-                            .child(tr::main::target::heading()),
-                    )
-                    .child(self.render_import_video_button(cx)),
+                    .px(px(4.))
+                    .text_size(px(10.))
+                    .line_height(px(14.))
+                    .text_color(self.theme.gray_11)
+                    .child(tr::main::target::heading()),
             )
             .child(
                 div()
