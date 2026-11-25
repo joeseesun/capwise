@@ -5354,6 +5354,7 @@ mod style_image_tests {
 
     fn spoken_caption() -> cap_project::CaptionSegment {
         cap_project::CaptionSegment {
+            manual_timing: None,
             id: "spoken".into(),
             start: 0.,
             end: 2.,

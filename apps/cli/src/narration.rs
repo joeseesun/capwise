@@ -311,6 +311,7 @@ fn add_captions(
                 })
                 .collect();
             Some(CaptionSegment {
+                manual_timing: None,
                 id: uuid::Uuid::new_v4().to_string(),
                 start: words.first()?.start,
                 end: words.last()?.end,

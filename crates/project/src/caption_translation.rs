@@ -122,11 +122,7 @@ pub fn export_subtitles(
         else {
             continue;
         };
-        let end = display.words.last().map_or(display.end, |word| {
-            display
-                .end
-                .min(f64::from(word.start) + crate::MAX_CAPTION_WORD_DURATION as f64)
-        });
+        let end = display.effective_end();
         let text = caption_presentation_text(&display, settings);
         if !display.start.is_finite() || !end.is_finite() || end <= display.start || text.is_empty()
         {

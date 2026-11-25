@@ -269,6 +269,7 @@ fn model_migrate(
         .iter()
         .filter_map(|c| {
             Some(CaptionSegment {
+                manual_timing: None,
                 id: c.id.clone(),
                 start: to_source(c.start)? as f32,
                 end: to_source(c.end)? as f32,
@@ -391,6 +392,7 @@ fn random_captions(rng: &mut Rng, total: f64) -> Vec<CaptionSegment> {
         if rng.range(0, 9) == 0 {
             let end = t + 0.2 + rng.f64() * 2.0;
             captions.push(CaptionSegment {
+                manual_timing: None,
                 id,
                 start: t as f32,
                 end: end as f32,
@@ -434,6 +436,7 @@ fn random_captions(rng: &mut Rng, total: f64) -> Vec<CaptionSegment> {
             end += (rng.f64() * 1.0) as f32;
         }
         captions.push(CaptionSegment {
+            manual_timing: None,
             id,
             start,
             end,
@@ -642,6 +645,7 @@ fn projection_hold_boundaries() {
     };
     let captions = vec![
         CaptionSegment {
+            manual_timing: None,
             id: "ends-at-hold".into(),
             start: 1.0,
             end: 2.0,
@@ -649,6 +653,7 @@ fn projection_hold_boundaries() {
             words: vec![word("apple", 1.0, 1.5), word("river", 1.5, 2.0)],
         },
         CaptionSegment {
+            manual_timing: None,
             id: "starts-at-hold".into(),
             start: 2.0,
             end: 3.0,
@@ -656,6 +661,7 @@ fn projection_hold_boundaries() {
             words: vec![word("cloud", 2.0, 2.5), word("stone", 2.5, 3.0)],
         },
         CaptionSegment {
+            manual_timing: None,
             id: "text-only-ends-at-second-hold".into(),
             start: 3.5,
             end: 4.0,
@@ -696,6 +702,7 @@ fn track_as_captions(track: &[CaptionTrackSegment]) -> Vec<CaptionSegment> {
     track
         .iter()
         .map(|t| CaptionSegment {
+            manual_timing: None,
             id: t.id.clone(),
             start: t.start as f32,
             end: t.end as f32,
@@ -808,6 +815,7 @@ fn legacy_migration_caption_at_timeline_end() {
     common::add_transition(&mut config, 1, 0.2);
     let end = edits::timeline(&config).duration() as f32;
     let legacy = vec![CaptionSegment {
+        manual_timing: None,
         id: "last".into(),
         start: end - 2.2,
         end,
@@ -1325,6 +1333,7 @@ fn transcription_audio_words() {
         .chunks(3)
         .enumerate()
         .map(|(i, chunk)| CaptionSegment {
+            manual_timing: None,
             id: format!("segment-{i}"),
             start: chunk[0].start,
             end: chunk[chunk.len() - 1].end,
@@ -1406,6 +1415,7 @@ fn scripted_captions(total: f64) -> Vec<CaptionSegment> {
             word += 1;
         }
         captions.push(CaptionSegment {
+            manual_timing: None,
             id: format!("segment-{}", captions.len()),
             start: words[0].start,
             end: words[2].end,
@@ -1515,6 +1525,7 @@ fn templates(
         .iter()
         .enumerate()
         .map(|(i, text)| CaptionSegment {
+            manual_timing: None,
             id: format!("t{i}"),
             start: (i as f64 * slot) as f32,
             end: (i as f64 * slot + slot - 0.05) as f32,
@@ -1766,6 +1777,7 @@ fn back_to_back_captions(total: f64) -> Vec<CaptionSegment> {
             })
             .collect();
         captions.push(CaptionSegment {
+            manual_timing: None,
             id: format!("segment-{}", captions.len()),
             start: words[0].start,
             end: words[1].end,

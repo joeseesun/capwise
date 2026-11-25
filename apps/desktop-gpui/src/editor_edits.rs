@@ -3906,6 +3906,7 @@ mod tests {
             .map(|index| {
                 let start = index as f32 * 3.0;
                 cap_project::CaptionSegment {
+                    manual_timing: None,
                     id: format!("caption-{index}"),
                     start,
                     end: start + 2.8,

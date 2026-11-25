@@ -216,7 +216,6 @@ const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
 // silence by transcription (e.g. a 16s "seconds."). Without this, such a segment
 // stays on screen for the whole inflated duration. Value comes from the shared
 // caption word utilities so it stays in sync with the transcription layers.
-const MAX_CAPTION_WORD_DURATION: f64 = cap_project::caption_words::MAX_CAPTION_WORD_DURATION as f64;
 
 fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -1651,12 +1650,7 @@ struct ActiveCaptionSegment<'a> {
 }
 
 fn caption_segment_effective_end(segment: &cap_project::CaptionTrackSegment) -> f64 {
-    match segment.words.last() {
-        Some(last) => segment
-            .end
-            .min(last.start as f64 + MAX_CAPTION_WORD_DURATION),
-        None => segment.end,
-    }
+    segment.effective_end()
 }
 
 fn find_active_caption_segment<'a>(
@@ -1752,6 +1746,7 @@ mod tests {
 
     fn segment(start: f64, end: f64, words: Vec<CaptionWord>) -> CaptionTrackSegment {
         CaptionTrackSegment {
+            manual_timing: false,
             id: "seg".to_string(),
             start,
             end,
@@ -1910,7 +1905,9 @@ mod tests {
     fn effective_end_clamps_inflated_trailing_word() {
         let seg = segment(36.1, 42.31, vec![word(36.1, 42.31)]);
         assert!(
-            (caption_segment_effective_end(&seg) - (36.1 + super::MAX_CAPTION_WORD_DURATION)).abs()
+            (caption_segment_effective_end(&seg)
+                - (36.1 + f64::from(cap_project::MAX_CAPTION_WORD_DURATION)))
+            .abs()
                 < 1e-4
         );
     }
@@ -2534,6 +2531,7 @@ mod gpu_tests {
                     .collect::<Vec<_>>();
                 let end = f64::from(words.last().map_or(start as f32, |word| word.end));
                 let segment = CaptionTrackSegment {
+                    manual_timing: false,
                     id: format!("caption-{index}"),
                     start,
                     end,

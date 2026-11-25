@@ -244,7 +244,7 @@ impl EditorWindow {
             .is_some_and(|edit| !edit.auditioning)
     }
 
-    fn caption_segments(&self) -> &[CaptionTrackSegment] {
+    pub(crate) fn caption_segments(&self) -> &[CaptionTrackSegment] {
         self.project
             .timeline
             .as_ref()
@@ -778,8 +778,8 @@ impl EditorWindow {
                     timeline.caption_segments[index + 1].text =
                         segment.text[byte..].trim().to_owned();
                 }
-                crate::transcription::write_caption_edit_to_source(project, index, &durations);
-                crate::transcription::write_caption_edit_to_source(project, index + 1, &durations);
+                crate::transcription::write_caption_text_to_source(project, index);
+                crate::transcription::write_caption_text_to_source(project, index + 1);
             }
             if let (Some(translation), Some(captions)) = (translation, project.captions.as_mut()) {
                 captions.settings.translations.insert(tail_id, translation);

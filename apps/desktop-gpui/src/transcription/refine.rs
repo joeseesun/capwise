@@ -207,7 +207,12 @@ pub fn apply_refined_captions(
     else {
         return false;
     };
-    if words_signature(&captions.segments) == refined.input_signature {
+    if captions
+        .segments
+        .iter()
+        .all(|caption| caption.manual_timing.is_none())
+        && words_signature(&captions.segments) == refined.input_signature
+    {
         captions.segments = refined.segments.clone();
     } else {
         let mut changed = false;
@@ -507,6 +512,7 @@ mod tests {
     #[test]
     fn refinement_preserves_hidden_words_changed_during_review() {
         let input = vec![CaptionSegment {
+            manual_timing: None,
             id: "a".into(),
             start: 0.0,
             end: 2.0,
@@ -561,6 +567,7 @@ mod tests {
     #[test]
     fn captions_keep_their_ids_when_recovered_words_split_them() {
         let caption = |id: &str, words: Vec<CaptionWord>| CaptionSegment {
+            manual_timing: None,
             id: id.to_string(),
             start: words[0].start,
             end: words[words.len() - 1].end,
@@ -595,6 +602,7 @@ mod tests {
     #[test]
     fn refining_split_captions_again_mints_no_duplicate_ids() {
         let caption = |id: &str, words: Vec<CaptionWord>| CaptionSegment {
+            manual_timing: None,
             id: id.to_string(),
             start: words[0].start,
             end: words[words.len() - 1].end,
@@ -650,6 +658,7 @@ mod tests {
     #[test]
     fn retimes_follow_input_words_past_recovered_ones() {
         let segment = |words: Vec<CaptionWord>| CaptionSegment {
+            manual_timing: None,
             id: "segment-0".to_string(),
             start: words.first().map_or(0.0, |word| word.start),
             end: words.last().map_or(0.0, |word| word.end),

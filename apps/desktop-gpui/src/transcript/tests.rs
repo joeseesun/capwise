@@ -33,6 +33,7 @@ fn captions(words: &[(&str, f64, f64)]) -> CaptionsData {
         .chunks(6)
         .enumerate()
         .map(|(index, chunk)| CaptionSegment {
+            manual_timing: None,
             id: format!("segment-{index}"),
             start: chunk[0].1 as f32,
             end: chunk[chunk.len() - 1].2 as f32,
@@ -1948,6 +1949,7 @@ fn hiding_a_filler_leaves_the_caption_but_not_the_timeline() {
     let words = [("好", 0.0, 0.2), ("呃", 0.8, 1.2), ("看", 1.8, 2.0)];
     let mut captions = cap_project::CaptionsData {
         segments: vec![cap_project::CaptionSegment {
+            manual_timing: None,
             id: "a".into(),
             start: 0.0,
             end: 2.0,
@@ -1992,6 +1994,7 @@ fn english_captions_move_to_per_word_flags_when_one_filler_comes_back() {
     let words = [("um", 0.0, 0.2), ("so", 0.4, 0.6), ("uh", 0.8, 1.0)];
     let mut captions = cap_project::CaptionsData {
         segments: vec![cap_project::CaptionSegment {
+            manual_timing: None,
             id: "a".into(),
             start: 0.0,
             end: 1.0,
@@ -2027,6 +2030,7 @@ fn a_filler_cut_reaches_the_next_word_so_its_tail_is_gone() {
     let words = [("的", 0.0, 0.2), ("呃", 1.2, 1.24), ("模", 1.4, 1.6)];
     let captions = cap_project::CaptionsData {
         segments: vec![cap_project::CaptionSegment {
+            manual_timing: None,
             id: "a".into(),
             start: 0.0,
             end: 1.6,

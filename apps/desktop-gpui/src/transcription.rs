@@ -2106,6 +2106,7 @@ fn caption_segments_from_groups(
         };
         for (chunk_idx, chunk) in chunks.into_iter().enumerate() {
             segments.push(CaptionSegment {
+                manual_timing: None,
                 id: if single {
                     format!("segment-{chunk_idx}")
                 } else {
@@ -2614,16 +2615,7 @@ pub fn sync_caption_words_with_text(
         .collect()
 }
 
-/// `updateSelectedCaption`'s source write-through (`CaptionsTab.tsx:257-315`):
-/// after a track segment's start/end/text was edited in output time, route
-/// the timing and content back onto the source-time caption master so the
-/// edit survives future clip changes. Style overrides stay on the track and
-/// are carried across by source id when re-derived.
-pub fn write_caption_edit_to_source(
-    project: &mut ProjectConfiguration,
-    index: usize,
-    recording_durations: &[f64],
-) {
+pub fn write_caption_text_to_source(project: &mut ProjectConfiguration, index: usize) {
     let Some(timeline) = project.timeline.as_ref() else {
         return;
     };
@@ -2631,19 +2623,11 @@ pub fn write_caption_edit_to_source(
         return;
     };
     let source_id = source_caption_id(&track_segment.id).to_string();
-    let (track_start, track_end, track_text) = (
-        track_segment.start,
-        track_segment.end,
-        track_segment.text.clone(),
-    );
+    let track_text = track_segment.text.clone();
 
     let Some(captions) = project.captions.as_mut() else {
         return;
     };
-    let timeline = project
-        .timeline
-        .as_ref()
-        .expect("timeline presence was just checked");
     let Some(source) = captions
         .segments
         .iter_mut()
@@ -2652,17 +2636,6 @@ pub fn write_caption_edit_to_source(
         return;
     };
 
-    let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    if let Some(start) =
-        map_edited_time_to_source(track_start, timeline, recording_durations, source_range)
-    {
-        source.start = start as f32;
-    }
-    if let Some(end) =
-        map_edited_time_to_source(track_end, timeline, recording_durations, source_range)
-    {
-        source.end = end as f32;
-    }
     source.text = track_text;
     source.words = sync_caption_words_with_text(
         &source.text,
@@ -2670,6 +2643,67 @@ pub fn write_caption_edit_to_source(
         f64::from(source.start),
         f64::from(source.end),
     );
+}
+
+pub fn write_caption_timing_to_source(
+    project: &mut ProjectConfiguration,
+    index: usize,
+    previous: [f64; 2],
+    requested: [f64; 2],
+    recording_durations: &[f64],
+) -> bool {
+    let Some(timeline) = project.timeline.as_mut() else {
+        return false;
+    };
+    let [start, end] = requested;
+    if !start.is_finite() || !end.is_finite() || start >= end || previous == requested {
+        return false;
+    }
+    let Some(track) = timeline.caption_segments.get_mut(index) else {
+        return false;
+    };
+    let id = source_caption_id(&track.id);
+    let source = project
+        .captions
+        .as_mut()
+        .filter(|captions| captions.source_timed)
+        .and_then(|captions| {
+            captions
+                .segments
+                .iter_mut()
+                .find(|caption| caption.id == id)
+        });
+    let Some(source) = source else {
+        (track.start, track.end) = (start, end);
+        track.manual_timing = true;
+        return true;
+    };
+    let bounds = source.manual_timing.unwrap_or_else(|| {
+        [
+            source.words.first().map_or(source.start, |word| word.start),
+            source.words.last().map_or(source.end, |word| {
+                word.end
+                    .min(word.start + cap_project::MAX_CAPTION_WORD_DURATION)
+            }),
+        ]
+    });
+    let preferred = Some((bounds[0].into(), bounds[1].into()));
+    let map_edge = |edge: usize| {
+        if requested[edge] == previous[edge] {
+            Some(bounds[edge])
+        } else {
+            map_edited_time_to_source(requested[edge], timeline, recording_durations, preferred)
+                .map(|time| time as f32)
+        }
+    };
+    let (Some(start), Some(end)) = (map_edge(0), map_edge(1)) else {
+        return false;
+    };
+    if start >= end || [start, end] == bounds {
+        return false;
+    }
+    source.manual_timing = Some([start, end]);
+    true
 }
 
 /// `applyCaptionResultToProject` (`captions.ts:469-527`): set the captions
@@ -2751,6 +2785,7 @@ pub(crate) fn append_caption_result(
             .caption_segments
             .iter()
             .map(|segment| CaptionSegment {
+                manual_timing: None,
                 id: segment.id.clone(),
                 start: segment.start as f32,
                 end: segment.end as f32,
@@ -2935,6 +2970,7 @@ mod tests {
             })
             .collect();
         CaptionSegment {
+            manual_timing: None,
             id: id.to_string(),
             start,
             end,
@@ -3007,7 +3043,7 @@ mod tests {
             cap_project::synchronize_captions(&mut project, &durations);
             project.timeline.as_mut().unwrap().caption_segments[0].text = text.into();
 
-            write_caption_edit_to_source(&mut project, 0, &durations);
+            write_caption_text_to_source(&mut project, 0);
             cap_project::synchronize_captions(&mut project, &durations);
             let dir = tempfile::tempdir().unwrap();
             project.write(dir.path()).unwrap();
@@ -3034,6 +3070,70 @@ mod tests {
                     .windows(2)
                     .all(|pair| pair[0].end <= pair[1].start)
             );
+        }
+    }
+
+    #[test]
+    fn caption_timing_edits_survive_projection_reload_and_export() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 4.0, "end": 24.0 }
+                ],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![caption("cue", 6.0, 8.0, &[("字幕", 6.0, 8.0)])],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [24.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+
+        for (start, end) in [(1.0, 5.0), (0.5, 5.0), (0.5, 1.5), (2.0, 3.0)] {
+            let segment = &project.timeline.as_ref().unwrap().caption_segments[0];
+            let previous = [segment.start, segment.end];
+            assert!(write_caption_timing_to_source(
+                &mut project,
+                0,
+                previous,
+                [start, end],
+                &durations,
+            ));
+            cap_project::synchronize_captions(&mut project, &durations);
+            let dir = tempfile::tempdir().unwrap();
+            project.write(dir.path()).unwrap();
+            project = ProjectConfiguration::load(dir.path()).unwrap();
+            cap_project::synchronize_captions(&mut project, &durations);
+            let track = &project.timeline.as_ref().unwrap().caption_segments[0];
+            assert_eq!((track.start, track.end), (start, end));
+            assert_eq!(track.text, "字幕");
+            assert_eq!(
+                (track.words[0].start, track.words[0].end),
+                (start as f32, end as f32)
+            );
+            let captions = project.captions.as_ref().unwrap();
+            assert_eq!(
+                (
+                    captions.segments[0].words[0].start,
+                    captions.segments[0].words[0].end
+                ),
+                (6.0, 8.0)
+            );
+            let subtitles = cap_project::export_subtitles(
+                std::slice::from_ref(track),
+                &captions.settings,
+                cap_project::SubtitleFormat::Srt,
+            );
+            assert!(subtitles.contains(&format!(
+                "00:00:{:02},{:03} --> 00:00:{:02},{:03}",
+                start as u32,
+                (start.fract() * 1000.0) as u32,
+                end as u32,
+                (end.fract() * 1000.0) as u32,
+            )));
         }
     }
 

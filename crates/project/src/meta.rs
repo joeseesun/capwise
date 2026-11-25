@@ -286,6 +286,7 @@ impl RecordingMeta {
                     .segments
                     .iter()
                     .map(|seg| crate::CaptionTrackSegment {
+                        manual_timing: false,
                         id: seg.id.clone(),
                         start: seg.start as f64,
                         end: seg.end as f64,
@@ -847,6 +848,7 @@ mod metadata_save_tests {
         let captions = CaptionsData {
             source_timed: true,
             segments: vec![crate::CaptionSegment {
+                manual_timing: None,
                 id: "source-caption".into(),
                 start: 1.25,
                 end: 2.75,
@@ -924,6 +926,7 @@ mod metadata_save_tests {
         let captions = |text: &str| CaptionsData {
             source_timed: true,
             segments: vec![crate::CaptionSegment {
+                manual_timing: None,
                 id: "caption".into(),
                 start: 1.0,
                 end: 2.0,

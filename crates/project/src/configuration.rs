@@ -2362,6 +2362,8 @@ pub struct CaptionTrackSegment {
     pub text: String,
     #[serde(default)]
     pub words: Vec<CaptionWord>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_timing: bool,
     #[serde(default)]
     pub fade_duration_override: Option<f32>,
     #[serde(default)]
@@ -2374,6 +2376,18 @@ pub struct CaptionTrackSegment {
     pub background_color_override: Option<String>,
     #[serde(default)]
     pub font_size_override: Option<u32>,
+}
+
+impl CaptionTrackSegment {
+    pub fn effective_end(&self) -> f64 {
+        if self.manual_timing {
+            return self.end;
+        }
+        self.words.last().map_or(self.end, |word| {
+            self.end
+                .min(f64::from(word.start) + f64::from(crate::MAX_CAPTION_WORD_DURATION))
+        })
+    }
 }
 
 /// How far a hold's start may sit from the clips' end, after float rounding,
@@ -2849,6 +2863,8 @@ pub struct CaptionSegment {
     pub text: String,
     #[serde(default)]
     pub words: Vec<CaptionWord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_timing: Option<[f32; 2]>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
