@@ -570,6 +570,7 @@ impl EditorWindow {
                         })
                         .input;
                     if pending_id.as_ref() != Some(&row.id)
+                        && !input.read(cx).is_focused(window)
                         && input.read(cx).text() != text.as_ref()
                     {
                         input.update(cx, |input, cx| input.set_text(text, cx));
