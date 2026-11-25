@@ -1422,6 +1422,18 @@ struct Drag {
     lane_target: Option<edits::LaneTarget>,
 }
 
+struct CaptionDragDraft {
+    id: String,
+    original: [f64; 2],
+    requested: Option<[f64; 2]>,
+}
+
+impl CaptionDragDraft {
+    fn matches(&self, caption: &cap_project::CaptionTrackSegment) -> bool {
+        self.id == caption.id && self.original == [caption.start, caption.end]
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct LaneReorder {
     source: TrackRow,
@@ -1558,7 +1570,7 @@ pub struct EditorWindow {
     hovered_row: Option<(TrackKind, u32)>,
     /// The live segment drag, if any.
     drag: Option<Drag>,
-    caption_drag_range: Option<[f64; 2]>,
+    caption_drag_draft: Option<CaptionDragDraft>,
     lane_reorder: Option<LaneReorder>,
     /// Generation guard for the 60Hz playback redraw ticker.
     playback_tick: u64,
@@ -2365,7 +2377,7 @@ impl EditorWindow {
             hovered_gutter: None,
             hovered_row: None,
             drag: None,
-            caption_drag_range: None,
+            caption_drag_draft: None,
             lane_reorder: None,
             playback_tick: 0,
             generating_auto_zoom: false,
@@ -3228,11 +3240,9 @@ impl EditorWindow {
             return;
         }
         self.caption_sync_signature = self.caption_projection_signature();
-        self.transcript.dirty = true;
-        self.publish_project();
+        self.caption_track_replaced();
         self.schedule_save(window, cx);
-        cx.notify();
-        window.refresh();
+        self.invalidate_caption_views(cx);
     }
 
     fn synchronize_caption_track(&mut self, force: bool) {
@@ -3240,8 +3250,17 @@ impl EditorWindow {
         if !force && self.caption_sync_signature == signature {
             return;
         }
+        let may_migrate = self
+            .project
+            .captions
+            .as_ref()
+            .is_some_and(|captions| !captions.source_timed);
         cap_project::synchronize_captions(&mut self.project, &self.clip_display_durations);
-        self.caption_sync_signature = self.caption_projection_signature();
+        self.caption_sync_signature = if may_migrate {
+            self.caption_projection_signature()
+        } else {
+            signature
+        };
     }
 
     fn caption_projection_signature(&self) -> Option<u64> {
@@ -3251,6 +3270,7 @@ impl EditorWindow {
         let timeline = self.project.timeline.as_ref()?;
         let mut hasher = std::hash::DefaultHasher::new();
         captions.source_timed.hash(&mut hasher);
+        captions.segments.len().hash(&mut hasher);
         for segment in &captions.segments {
             segment.id.hash(&mut hasher);
             segment.start.to_bits().hash(&mut hasher);
@@ -3260,10 +3280,12 @@ impl EditorWindow {
                 .map(|range| range.map(f32::to_bits))
                 .hash(&mut hasher);
             segment.text.hash(&mut hasher);
+            segment.words.len().hash(&mut hasher);
             for word in &segment.words {
                 word.text.hash(&mut hasher);
                 word.start.to_bits().hash(&mut hasher);
                 word.end.to_bits().hash(&mut hasher);
+                word.hidden.hash(&mut hasher);
             }
         }
         for segment in &timeline.segments {
@@ -3274,8 +3296,11 @@ impl EditorWindow {
         }
         for transition in &timeline.transitions {
             transition.segment_index.hash(&mut hasher);
-            format!("{:?}", transition.kind).hash(&mut hasher);
             transition.duration.to_bits().hash(&mut hasher);
+        }
+        self.clip_display_durations.len().hash(&mut hasher);
+        for duration in &self.clip_display_durations {
+            duration.to_bits().hash(&mut hasher);
         }
         for (start, end) in timeline.hold_windows() {
             start.to_bits().hash(&mut hasher);
@@ -5903,6 +5928,17 @@ impl EditorWindow {
         };
 
         let paused = kind != TrackKind::Caption;
+        self.caption_drag_draft = if paused {
+            None
+        } else {
+            self.caption_segments()
+                .get(index)
+                .map(|caption| CaptionDragDraft {
+                    id: caption.id.clone(),
+                    original: [caption.start, caption.end],
+                    requested: None,
+                })
+        };
         if paused {
             self.history.pause();
         }
@@ -7144,7 +7180,13 @@ impl EditorWindow {
         preview_time: Option<f64>,
         cx: &mut Context<Self>,
     ) {
-        if self.voiceover.is_busy() {
+        if self.voiceover.is_busy()
+            || !self.caption_drag_draft.as_ref().is_some_and(|draft| {
+                self.caption_segments()
+                    .get(index)
+                    .is_some_and(|caption| draft.matches(caption))
+            })
+        {
             return;
         }
         let Some(segment) = self.timeline.caption.get_mut(index) else {
@@ -7152,7 +7194,9 @@ impl EditorWindow {
         };
         let [start, end] = range;
         (segment.start, segment.end) = (start, end);
-        self.caption_drag_range = Some(range);
+        if let Some(draft) = self.caption_drag_draft.as_mut() {
+            draft.requested = Some(range);
+        }
         if let Some(time) = preview_time {
             self.view.preview_time = Some(time);
         }
@@ -7750,7 +7794,7 @@ impl EditorWindow {
     fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.drag_snap_targets = snap::SnapTargets::default();
         self.drag_snap_time = None;
-        let caption_range = self.caption_drag_range.take();
+        let caption_draft = self.caption_drag_draft.take();
         let Some(drag) = self.drag.take() else {
             self.clip_draft = None;
             return;
@@ -7809,15 +7853,23 @@ impl EditorWindow {
             self.select_keyframe(drag.track, drag.index, key);
         }
 
-        if let Some(requested) = caption_range
-            && !self.commit_caption_timing(drag.index, requested, window, cx)
-            && let Some(caption) = self.caption_segments().get(drag.index)
+        if let Some(draft) = caption_draft
+            && let Some(requested) = draft.requested
         {
-            let model = timeline::caption_track_segment(caption, self.timeline.total_duration);
-            if let Some(segment) = self.timeline.caption.get_mut(drag.index) {
-                *segment = model;
+            let same_caption = self
+                .caption_segments()
+                .get(drag.index)
+                .is_some_and(|caption| draft.matches(caption));
+            if !same_caption || !self.commit_caption_timing(drag.index, requested, window, cx) {
+                if let Some(caption) = self.caption_segments().get(drag.index) {
+                    let model =
+                        timeline::caption_track_segment(caption, self.timeline.total_duration);
+                    if let Some(segment) = self.timeline.caption.get_mut(drag.index) {
+                        *segment = model;
+                    }
+                }
+                self.emit_preview_frame();
             }
-            self.emit_preview_frame();
         }
 
         if drag.moved

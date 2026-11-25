@@ -2901,20 +2901,33 @@ impl EditorWindow {
             }
             input
         });
-        let pending_caption_time = std::cell::RefCell::new(None);
+        let pending_caption_time = std::cell::RefCell::<Option<(String, String)>>::new(None);
         self.push_text_subscription(cx.subscribe_in(
             &input,
             window,
             move |this: &mut Self, input, event: &ui::TextInputEvent, window, cx| {
                 if let FieldKey::CaptionStart(index) | FieldKey::CaptionEnd(index) = key {
                     if matches!(event, ui::TextInputEvent::Changed) {
-                        *pending_caption_time.borrow_mut() =
-                            Some(input.read(cx).text().to_string());
+                        let text = input.read(cx).text().to_string();
+                        let mut pending = pending_caption_time.borrow_mut();
+                        if let Some((_, draft)) = pending.as_mut() {
+                            *draft = text;
+                        } else if let Some(caption) = this.caption_segments().get(index) {
+                            *pending = Some((caption.id.clone(), text));
+                        }
                         return;
                     }
                     let end = matches!(key, FieldKey::CaptionEnd(_));
-                    if let Some(text) = pending_caption_time.take() {
-                        this.commit_caption_time_entry(index, end, &text, window, cx);
+                    if let Some((id, text)) = pending_caption_time.take() {
+                        let captions = this.caption_segments();
+                        let index = captions
+                            .get(index)
+                            .filter(|caption| caption.id == id)
+                            .map(|_| index)
+                            .or_else(|| captions.iter().position(|caption| caption.id == id));
+                        if let Some(index) = index {
+                            this.commit_caption_time_entry(index, end, &text, window, cx);
+                        }
                     }
                     if !matches!(event, ui::TextInputEvent::Blurred) {
                         let focus = this.focus_handle_for_menu();

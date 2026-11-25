@@ -2537,36 +2537,56 @@ fn held_time_before(holds: &[(f64, f64)], time: f64) -> f64 {
         .sum()
 }
 
-/// `mapEditedTimeToSource` (`captions.ts:428-467`) in its `"outgoing"`
-/// preference -- the mode the caption override panel uses. The `"incoming"`
-/// arm serves only the legacy non-source-timed inversion, which this build
-/// never produces.
 pub fn map_edited_time_to_source(
     edited_time: f64,
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
     source_range: Option<(f64, f64)>,
 ) -> Option<f64> {
-    let edited_time = edited_time - held_time_before(&timeline.hold_windows(), edited_time);
-    let mut fallback = None;
-    for mapping in build_source_to_edited_mappings(timeline, recording_durations) {
+    source_time_for_caption_edge(
+        edited_time,
+        &timeline.hold_windows(),
+        &build_source_to_edited_mappings(timeline, recording_durations),
+        source_range,
+        false,
+    )
+}
+
+fn source_time_for_caption_edge(
+    output: f64,
+    holds: &[(f64, f64)],
+    mappings: &[SourceToEditedMapping],
+    source_range: Option<(f64, f64)>,
+    start_edge: bool,
+) -> Option<f64> {
+    let edited_time = output - held_time_before(holds, output);
+    let mut best = None;
+    for mapping in mappings {
         let edited_end =
             mapping.edited_start + (mapping.source_end - mapping.source_start) / mapping.timescale;
-        if edited_time >= mapping.edited_start && edited_time <= edited_end {
+        if !edited_end.is_finite()
+            || edited_end <= mapping.edited_start
+            || edited_time < mapping.edited_start - 1e-9
+            || edited_time > edited_end + 1e-9
+        {
+            continue;
+        }
+        let time = edited_time.clamp(mapping.edited_start, edited_end);
+        let has_media_on_caption_side = if start_edge {
+            edited_end - time > 1e-9
+        } else {
+            time - mapping.edited_start > 1e-9
+        };
+        let shares_source = source_range
+            .is_some_and(|(start, end)| start < mapping.source_end && end > mapping.source_start);
+        let priority = (has_media_on_caption_side, shares_source);
+        if best.is_none_or(|(current, _)| priority > current) {
             let source_time =
-                mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale;
-            if let Some((range_start, range_end)) = source_range
-                && range_start < mapping.source_end
-                && range_end > mapping.source_start
-            {
-                return Some(source_time);
-            }
-            if fallback.is_none() {
-                fallback = Some(source_time);
-            }
+                mapping.source_start + (time - mapping.edited_start) * mapping.timescale;
+            best = Some((priority, source_time));
         }
     }
-    fallback
+    best.map(|(_, time)| time)
 }
 
 /// `syncCaptionWordsWithText` (`captions.ts:593-632`): keep word timings when
@@ -2688,18 +2708,20 @@ pub fn write_caption_timing_to_source(
         ]
     });
     let preferred = Some((bounds[0].into(), bounds[1].into()));
+    let holds = timeline.hold_windows();
+    let mappings = build_source_to_edited_mappings(timeline, recording_durations);
     let map_edge = |edge: usize| {
         if requested[edge] == previous[edge] {
             Some(bounds[edge])
         } else {
-            map_edited_time_to_source(requested[edge], timeline, recording_durations, preferred)
+            source_time_for_caption_edge(requested[edge], &holds, &mappings, preferred, edge == 0)
                 .map(|time| time as f32)
         }
     };
     let (Some(start), Some(end)) = (map_edge(0), map_edge(1)) else {
         return false;
     };
-    if start >= end || [start, end] == bounds {
+    if !start.is_finite() || !end.is_finite() || start >= end || [start, end] == bounds {
         return false;
     }
     source.manual_timing = Some([start, end]);
@@ -2785,7 +2807,9 @@ pub(crate) fn append_caption_result(
             .caption_segments
             .iter()
             .map(|segment| CaptionSegment {
-                manual_timing: None,
+                manual_timing: segment
+                    .manual_timing
+                    .then_some([segment.start as f32, segment.end as f32]),
                 id: segment.id.clone(),
                 start: segment.start as f32,
                 end: segment.end as f32,
@@ -3134,6 +3158,47 @@ mod tests {
                 end as u32,
                 (end.fract() * 1000.0) as u32,
             )));
+        }
+    }
+
+    #[test]
+    fn caption_timing_anchors_the_start_and_end_to_their_side_of_a_cut() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 8.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 5.0, "end": 9.0 }
+                ],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![caption("cue", 5.0, 6.0, &[("caption", 5.0, 6.0)])],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [10.0, 10.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+        for (previous, requested, source) in [
+            ([1.0, 2.0], [4.0, 5.0], [15.0, 16.0]),
+            ([4.0, 5.0], [3.0, 4.0], [7.0, 8.0]),
+        ] {
+            assert!(write_caption_timing_to_source(
+                &mut project,
+                0,
+                previous,
+                requested,
+                &durations
+            ));
+            assert_eq!(
+                project.captions.as_ref().unwrap().segments[0].manual_timing,
+                Some(source)
+            );
+            cap_project::synchronize_captions(&mut project, &durations);
+            let track = &project.timeline.as_ref().unwrap().caption_segments;
+            assert_eq!(track.len(), 1);
+            assert_eq!([track[0].start, track[0].end], requested);
         }
     }
 
