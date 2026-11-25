@@ -1688,7 +1688,6 @@ pub struct EditorWindow {
     caption_seek_preview: bool,
     pub(crate) caption_edit: Option<crate::caption_canvas::CaptionCanvasEdit>,
     pub(crate) caption_text_draft: Option<crate::caption_canvas::CaptionTextDraft>,
-    pub(crate) caption_text_commit_task: Option<gpui::Task<()>>,
     /// The caption edit a press on the preview caption opened, still open to
     /// become a drag instead.
     pub(crate) caption_press: bool,
@@ -2159,6 +2158,7 @@ impl EditorWindow {
     ) -> Self {
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
+                this.commit_caption_drafts(window, cx);
                 this.cancel_asset_drag(cx);
                 let minimap_canceled = this.minimap_drag.take().is_some();
                 let lane_reorder_canceled = this.lane_reorder.is_some();
@@ -2426,7 +2426,6 @@ impl EditorWindow {
             caption_seek_preview: false,
             caption_edit: None,
             caption_text_draft: None,
-            caption_text_commit_task: None,
             caption_press: false,
             hovered_canvas: None,
             player_panel_bounds: ui::SliderTrack::default(),
@@ -3049,7 +3048,7 @@ impl EditorWindow {
         cx.notify();
     }
 
-    pub(crate) fn edit_caption_text_live(&mut self, index: usize, text: String) -> bool {
+    pub(crate) fn write_caption_text(&mut self, index: usize, text: String) -> bool {
         if !self.project_ready() || self.voiceover.is_busy() {
             return false;
         }

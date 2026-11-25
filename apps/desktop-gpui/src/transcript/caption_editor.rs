@@ -41,8 +41,7 @@ pub(super) struct CaptionEditor {
     list: ListState,
     matches: Vec<Match>,
     menu: Option<DeleteMenu>,
-    draft: Option<(SharedString, String)>,
-    commit_task: Option<gpui::Task<()>>,
+    draft: Option<(SharedString, SharedString)>,
 }
 
 impl Default for CaptionEditor {
@@ -55,7 +54,6 @@ impl Default for CaptionEditor {
             matches: Vec::new(),
             menu: None,
             draft: None,
-            commit_task: None,
         }
     }
 }
@@ -379,7 +377,7 @@ impl EditorWindow {
     fn queue_caption_editor_edit(
         &mut self,
         id: SharedString,
-        text: String,
+        text: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -395,17 +393,7 @@ impl EditorWindow {
         {
             self.commit_caption_editor_edit(window, cx);
         }
-        let editor = &mut self.transcript.caption_editor;
-        editor.draft = Some((id, text));
-        editor.commit_task = Some(cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor()
-                .timer(crate::caption_canvas::CAPTION_TEXT_IDLE)
-                .await;
-            this.update_in(cx, |this, window, cx| {
-                this.commit_caption_editor_edit(window, cx)
-            })
-            .ok();
-        }));
+        self.transcript.caption_editor.draft = Some((id, text));
     }
 
     pub(crate) fn commit_caption_editor_edit(
@@ -415,7 +403,7 @@ impl EditorWindow {
     ) {
         let editor = &mut self.transcript.caption_editor;
         if let Some((id, text)) = editor.draft.take() {
-            self.caption_editor_edit(&id, text, None, window, cx);
+            self.caption_editor_edit(&id, text.to_string(), None, window, cx);
         }
     }
 
@@ -423,8 +411,7 @@ impl EditorWindow {
         let Some((id, text)) = self.transcript.caption_editor.draft.take() else {
             return false;
         };
-        self.transcript.caption_editor.commit_task = None;
-        if !edit_caption_text(&mut self.project, &id, text, None) {
+        if !edit_caption_text(&mut self.project, &id, text.to_string(), None) {
             return false;
         }
         self.caption_text_content_changed(&id);
@@ -540,13 +527,18 @@ impl EditorWindow {
                                 let _ = window.update(cx, |_, window, cx| {
                                     let _ = view.update(cx, |this, cx| match event {
                                         ui::TextInputEvent::Changed => {
-                                            let text = input.read(cx).text().to_string();
+                                            let text = input.read(cx).shared_text();
                                             this.queue_caption_editor_edit(
                                                 id.clone(),
                                                 text,
                                                 window,
                                                 cx,
                                             );
+                                            if !window.is_window_active()
+                                                || !input.read(cx).is_focused(window)
+                                            {
+                                                this.commit_caption_editor_edit(window, cx);
+                                            }
                                         }
                                         ui::TextInputEvent::Blurred => {
                                             if this
