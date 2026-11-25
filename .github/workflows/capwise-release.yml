@@ -54,6 +54,7 @@ jobs:
       - name: Install tools and native dependencies
         run: |
           brew install minisign zstd
+          scripts/prepare-gpui-dependency.sh
           bun install --frozen-lockfile
           bun run cap-setup
 
