@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
+import contextlib
+import io
+import json
+import plistlib
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_perf
@@ -35,6 +40,37 @@ class LogParsing(unittest.TestCase):
             self.assertTrue(general["hasCompletedStartup"])
             self.assertFalse(general["autoCaptionsAfterRecording"])
             self.assertEqual(general["recordingCountdown"], 0)
+
+
+class BundleProvenance(unittest.TestCase):
+    def test_uses_app_commit_and_separate_checkout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            app = root / "Capwise.app"
+            binary = app / "Contents" / "MacOS" / "Capwise"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"abc")
+            app_commit = "b" * 40
+            with (app / "Contents" / "Info.plist").open("wb") as output:
+                plistlib.dump(
+                    {"CFBundleShortVersionString": "1.0", "CapwiseLocalTestCommit": app_commit},
+                    output,
+                    fmt=plistlib.FMT_BINARY,
+                )
+            result_path = root / "report.json"
+            args = SimpleNamespace(
+                app=app, stages="", work=root / "work", fixture=None, keep=False, out=result_path
+            )
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                bench_perf.run(args)
+            meta = json.loads(result_path.read_text())["meta"]
+            self.assertEqual(meta["app_commit"], app_commit)
+            self.assertNotEqual(meta["checkout_commit"], app_commit)
+            self.assertEqual(
+                meta["app_binary_sha256"],
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            )
+            self.assertIsNone(meta["cli_binary_sha256"])
 
 
 class Verdicts(unittest.TestCase):

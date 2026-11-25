@@ -1,8 +1,12 @@
 use std::borrow::Cow;
 use std::ops::Range;
+use std::sync::{Arc, Weak};
 
 use bytemuck::{Pod, Zeroable};
-use cap_project::{CaptionWord, XY, caption_words::caption_display_segment};
+use cap_project::{
+    CaptionTrackSegment, CaptionWord, ProjectConfiguration, XY,
+    caption_words::caption_display_segment,
+};
 use glyphon::cosmic_text::LayoutRunIter;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
@@ -645,6 +649,54 @@ impl CaptionText {
     }
 }
 
+#[derive(Default)]
+struct CaptionSearch {
+    project: Weak<ProjectConfiguration>,
+    end_prefix: Vec<f64>,
+}
+
+impl CaptionSearch {
+    fn candidates<'a>(
+        &mut self,
+        project: &Arc<ProjectConfiguration>,
+        time: f64,
+        segments: &'a [CaptionTrackSegment],
+        default_fade: f32,
+    ) -> &'a [CaptionTrackSegment] {
+        if segments.len() < 64 || !time.is_finite() {
+            return segments;
+        }
+        if self.project.as_ptr() != Arc::as_ptr(project) {
+            self.project = Arc::downgrade(project);
+            self.end_prefix.clear();
+            let mut previous_start = f64::NEG_INFINITY;
+            let mut latest_end = f64::NEG_INFINITY;
+            for segment in segments {
+                let end = caption_segment_effective_end(segment);
+                let fade = f64::from(segment.fade_duration_override.unwrap_or(default_fade));
+                if !segment.start.is_finite()
+                    || !end.is_finite()
+                    || !fade.is_finite()
+                    || segment.start < previous_start
+                    || end < segment.start
+                {
+                    self.end_prefix.clear();
+                    break;
+                }
+                previous_start = segment.start;
+                latest_end = latest_end.max(end + fade.max(0.0));
+                self.end_prefix.push(latest_end);
+            }
+        }
+        if self.end_prefix.is_empty() {
+            return segments;
+        }
+        let end = segments.partition_point(|segment| segment.start <= time);
+        let start = self.end_prefix.partition_point(|end| *end <= time);
+        &segments[start.min(end)..end]
+    }
+}
+
 pub struct CaptionsLayer {
     _settings_buffer: wgpu::Buffer,
     font_system: FontSystem,
@@ -658,6 +710,7 @@ pub struct CaptionsLayer {
     translation_outline_text: CaptionText,
     translation_shadow_text: CaptionText,
     family_has_simplified_han: std::collections::HashMap<String, bool>,
+    search: CaptionSearch,
     current_text: Option<String>,
     current_segment_start: f32,
     current_segment_end: f32,
@@ -806,6 +859,7 @@ impl CaptionsLayer {
             translation_outline_text: CaptionText::new(),
             translation_shadow_text: CaptionText::new(),
             family_has_simplified_han: std::collections::HashMap::new(),
+            search: CaptionSearch::default(),
             current_text: None,
             current_segment_start: 0.0,
             current_segment_end: 0.0,
@@ -878,9 +932,15 @@ impl CaptionsLayer {
         let default_fade = caption_data.settings.fade_duration;
         let word_transition_duration = caption_data.settings.word_transition_duration;
 
-        let Some(active) = find_active_caption_segment(
+        let candidates = self.search.candidates(
+            &uniforms.project,
             current_time,
             &timeline.caption_segments,
+            default_fade,
+        );
+        let Some(active) = find_active_caption_segment(
+            current_time,
+            candidates,
             default_fade,
             caption_data.settings.hides_fillers(),
         ) else {
@@ -1738,7 +1798,7 @@ fn calculate_caption_bounce(current_time: f64, start: f64, end: f64, fade_durati
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptionFrameBox, CaptionPosition, caption_box_origin, caption_center,
+        CaptionFrameBox, CaptionPosition, CaptionSearch, caption_box_origin, caption_center,
         caption_segment_effective_end, find_active_caption_segment, find_active_word_index,
         word_byte_range,
     };
@@ -1976,6 +2036,50 @@ mod tests {
         let verbatim = find_active_caption_segment(1.2, &segments, 0.0, false).unwrap();
         assert_eq!(verbatim.segment.text, "Um, we ship uh.");
         assert!(find_active_caption_segment(3.0, &segments, 0.0, false).is_some());
+    }
+
+    #[test]
+    fn caption_search_preserves_overlaps_fades_and_legacy_order() {
+        use std::sync::Arc;
+
+        let mut track: Vec<_> = (0..80)
+            .map(|index| {
+                let start = f64::from(index) * 2.0;
+                let mut cue = segment(start, start + 1.0, Vec::new());
+                cue.id = index.to_string();
+                cue.fade_duration_override = Some(if index % 3 == 0 { 2.5 } else { 0.2 });
+                cue
+            })
+            .collect();
+        track[8].end = 19.0;
+        track[8].manual_timing = true;
+        track[8].words.push(word(16.0, 16.25));
+        let mut project = Arc::new(cap_project::ProjectConfiguration::default());
+        let mut search = CaptionSearch::default();
+
+        let assert_same = |search: &mut CaptionSearch, project: &Arc<_>, track: &[_]| {
+            for time in (-1..652).map(|step| f64::from(step) / 4.0) {
+                for hide_fillers in [false, true] {
+                    let select = |segments| {
+                        find_active_caption_segment(time, segments, 0.2, hide_fillers)
+                            .map(|active| active.segment.id.clone())
+                    };
+                    let candidates = search.candidates(project, time, track, 0.2);
+                    assert_eq!(select(candidates), select(track), "time {time}");
+                }
+            }
+        };
+
+        assert_same(&mut search, &project, &track);
+        assert!(search.candidates(&project, 149.0, &track, 0.2).len() < 4);
+
+        track.swap(0, 9);
+        Arc::make_mut(&mut project).editing_caption = true;
+        assert_same(&mut search, &project, &track);
+        assert_eq!(
+            search.candidates(&project, 149.0, &track, 0.2).len(),
+            track.len()
+        );
     }
 
     #[test]

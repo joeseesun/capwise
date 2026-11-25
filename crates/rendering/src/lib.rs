@@ -3,7 +3,7 @@ use cap_project::{
     AspectRatio, Camera, CameraXPosition, CameraYPosition, ClipOffsets, ClipTransitionType,
     CornerStyle, Crop, CursorEvents, CursorType, FLOATING_SPLIT_PADDING, FrameConfiguration,
     FrameStyle, OverlayTrackKind, ProjectConfiguration, ProjectStyleCache, RecordingMeta,
-    SceneMode, StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY, floating_split_panes,
+    SceneMode, StudioRecordingMeta, TimelineSource, XY, floating_split_panes,
 };
 use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
@@ -1032,24 +1032,16 @@ pub async fn render_video_to_channel(
         };
 
         let frame_time = current_frame_number as f64 / fps as f64;
-        let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
-            if timeline.transitions.is_empty() {
-                return None;
-            }
-            match timeline.get_frame_mapping(frame_time) {
-                Some(TimelineFrameMapping::Transition {
-                    outgoing,
-                    kind,
-                    progress,
-                    ..
-                }) => Some((outgoing, kind, progress)),
-                _ => None,
-            }
-        });
-
-        let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
+        let Some(mapping) = project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.get_frame_mapping(frame_time))
+        else {
             break;
         };
+        let transition_mapping = mapping.outgoing_transition();
+        let source = mapping.primary_source();
+        let (segment_time, segment) = (source.source_time, source.segment);
 
         let clip_config = project
             .clips
@@ -1626,24 +1618,16 @@ pub async fn render_video_to_channel_nv12(
         };
 
         let frame_time = current_frame_number as f64 / fps as f64;
-        let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
-            if timeline.transitions.is_empty() {
-                return None;
-            }
-            match timeline.get_frame_mapping(frame_time) {
-                Some(TimelineFrameMapping::Transition {
-                    outgoing,
-                    kind,
-                    progress,
-                    ..
-                }) => Some((outgoing, kind, progress)),
-                _ => None,
-            }
-        });
-
-        let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
+        let Some(mapping) = project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.get_frame_mapping(frame_time))
+        else {
             break;
         };
+        let transition_mapping = mapping.outgoing_transition();
+        let source = mapping.primary_source();
+        let (segment_time, segment) = (source.source_time, source.segment);
 
         let clip_config = project
             .clips

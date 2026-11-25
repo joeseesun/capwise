@@ -196,11 +196,28 @@ impl DeviceSnapshot {
     /// window-server queries are both slow enough to drop frames — so callers
     /// should run it on the background executor, never inside `render`.
     pub fn enumerate() -> Self {
-        Self {
-            cameras: list_cameras(),
-            microphones: list_microphone_names(),
-            displays: list_displays(),
-            windows: list_windows(),
+        #[cfg(target_os = "macos")]
+        {
+            std::thread::scope(|scope| {
+                let cameras = scope.spawn(list_cameras);
+                let microphones = scope.spawn(list_microphone_names);
+                let TargetSnapshot { displays, windows } = TargetSnapshot::enumerate();
+                Self {
+                    cameras: cameras.join().expect("camera enumeration panicked"),
+                    microphones: microphones.join().expect("microphone enumeration panicked"),
+                    displays,
+                    windows,
+                }
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self {
+                cameras: list_cameras(),
+                microphones: list_microphone_names(),
+                displays: list_displays(),
+                windows: list_windows(),
+            }
         }
     }
 }

@@ -9,6 +9,7 @@ export type {
 export {
 	cancelScreenRecording,
 	getScreenRecordingAvailability,
+	getScreenRecordingStatus,
 	getScreenRecordingUpdates,
 	prepareScreenRecording,
 } from "./src/CapScreenRecorderModule";

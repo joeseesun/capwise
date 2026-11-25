@@ -27,10 +27,12 @@ under the scratch directory; it is deleted afterwards unless --keep is given.
 """
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import re
 import shutil
 import signal
@@ -46,7 +48,7 @@ DEFAULT_APP = Path("/Applications/Capwise.app")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 LOG_LINE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+)Z\s+(\w+)\s+(.*)$")
 FRAME_BUDGET_MS = 1000.0 / 60.0
-BINARY_MTIME = {}
+BINARY_STAMPS = {}
 
 TARGETS = {
     "startup.launch_to_window_ms": ("<", 300.0, "冷启动 → 主窗口创建"),
@@ -115,6 +117,7 @@ class Sandbox:
             {
                 "CAP_GPUI_APP_DATA_DIR": str(self.root),
                 "CAP_GPUI_RECORDINGS_DIR": str(self.recordings),
+                "CAP_GPUI_TAURI_STORE": str(self.root / "legacy-store"),
                 "CAP_GPUI_LOG_DIR": str(self.root / "logs"),
                 "CAP_GPUI_NO_TRAY": "1",
                 "CAP_GPUI_NO_MENUS": "1",
@@ -127,9 +130,7 @@ class Sandbox:
         )
         env.update(extra_env)
         binary = app / "Contents" / "MacOS" / "Capwise"
-        if BINARY_MTIME.get(str(binary)) not in (None, binary.stat().st_mtime):
-            raise RuntimeError(f"{binary} was replaced during the run (reinstalled?); results would mix builds")
-        BINARY_MTIME.setdefault(str(binary), binary.stat().st_mtime)
+        verify_binary_stamp(binary)
         handle = open(self.out, "wb")
         self.spawned_at = time.time()
         self.proc = subprocess.Popen(
@@ -492,6 +493,7 @@ def stage_export(args, work, results, state):
     cli = args.app / "Contents" / "MacOS" / "cap-cli"
     if not cli.exists():
         return
+    verify_binary_stamp(cli)
     for label, resolution, fps in (("720p30", "1280x720", "30"), ("1080p60", "1920x1080", "60")):
         cli_out = sandbox.root / f"export-cli-{label}.mp4"
         started = time.time()
@@ -539,28 +541,53 @@ def print_table(results):
             print(f"  {key} = {results[key]}")
 
 
+def binary_stamp(path):
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def verify_binary_stamp(path):
+    current = binary_stamp(path)
+    if BINARY_STAMPS.setdefault(path, current) != current:
+        raise RuntimeError(f"{path} was replaced during the run; results would mix builds")
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as contents:
+        for chunk in iter(lambda: contents.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run(args):
     args.app = Path(args.app)
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]
     work = Path(args.work or tempfile.mkdtemp(prefix="capwise-bench-"))
     work.mkdir(parents=True, exist_ok=True)
     log(f"sandboxes under {work}")
-    plist = args.app / "Contents" / "Info.plist"
-    version = subprocess.run(
-        ["/usr/libexec/PlistBuddy", "-c", "Print CFBundleShortVersionString", str(plist)],
-        capture_output=True, text=True,
-    ).stdout.strip()
+    with (args.app / "Contents" / "Info.plist").open("rb") as contents:
+        plist = plistlib.load(contents)
     binary = args.app / "Contents" / "MacOS" / "Capwise"
+    cli = binary.with_name("cap-cli")
+    BINARY_STAMPS[binary] = binary_stamp(binary)
+    BINARY_STAMPS[cli] = binary_stamp(cli)
     results = {
         "meta": {
             "date": dt.datetime.now().isoformat(timespec="seconds"),
             "app": str(args.app),
-            "app_version": version,
+            "app_version": plist.get("CFBundleShortVersionString"),
+            "app_commit": plist.get("CapwiseLocalTestCommit"),
+            "app_binary_sha256": file_sha256(binary),
+            "cli_binary_sha256": file_sha256(cli) if cli.is_file() else None,
             "app_binary_mtime": dt.datetime.fromtimestamp(binary.stat().st_mtime).isoformat(timespec="seconds"),
             "machine": platform.machine(),
             "chip": subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True).stdout.strip(),
             "macos": platform.mac_ver()[0],
-            "git": subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=APP_DIR, capture_output=True, text=True).stdout.strip(),
+            "checkout_commit": subprocess.run(["git", "rev-parse", "HEAD"], cwd=APP_DIR, capture_output=True, text=True).stdout.strip(),
             "stages": stages,
         }
     }
@@ -594,6 +621,8 @@ def run(args):
     finally:
         if not args.keep and not args.work:
             shutil.rmtree(work, ignore_errors=True)
+    verify_binary_stamp(binary)
+    verify_binary_stamp(cli)
     print_table(results)
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)

@@ -2353,6 +2353,27 @@ pub enum TimelineFrameMapping<'a> {
     },
 }
 
+impl<'a> TimelineFrameMapping<'a> {
+    pub fn primary_source(self) -> TimelineSource<'a> {
+        match self {
+            Self::Single { source, .. } | Self::Hold { source, .. } => source,
+            Self::Transition { incoming, .. } => incoming,
+        }
+    }
+
+    pub fn outgoing_transition(self) -> Option<(TimelineSource<'a>, ClipTransitionType, f64)> {
+        match self {
+            Self::Transition {
+                outgoing,
+                kind,
+                progress,
+                ..
+            } => Some((outgoing, kind, progress)),
+            Self::Single { .. } | Self::Hold { .. } => None,
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptionTrackSegment {
@@ -2697,15 +2718,8 @@ impl TimelineConfiguration {
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
-        match self.get_frame_mapping(frame_time)? {
-            TimelineFrameMapping::Single { source, .. }
-            | TimelineFrameMapping::Hold { source, .. } => {
-                Some((source.source_time, source.segment))
-            }
-            TimelineFrameMapping::Transition { incoming, .. } => {
-                Some((incoming.source_time, incoming.segment))
-            }
-        }
+        let source = self.get_frame_mapping(frame_time)?.primary_source();
+        Some((source.source_time, source.segment))
     }
 
     fn get_segment_time_without_transitions(

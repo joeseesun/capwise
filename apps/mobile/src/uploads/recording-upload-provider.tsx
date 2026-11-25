@@ -15,7 +15,7 @@ import { useAuth } from "@/auth/AuthContext";
 import type { CapRecorderSegmentEvent } from "../../modules/cap-recorder";
 import {
 	cancelScreenRecording,
-	getScreenRecordingUpdates,
+	getScreenRecordingStatus,
 } from "../../modules/cap-screen-recorder";
 import {
 	emptyRecordingUploadQueue,
@@ -122,7 +122,7 @@ const reconcileExternalRecordings = async (queue: RecordingUploadQueue) => {
 	for (const job of queue.jobs) {
 		if (job.uploadOwner !== "external") continue;
 		try {
-			const updates = await getScreenRecordingUpdates(job.id);
+			const updates = await getScreenRecordingStatus(job.id);
 			if (updates.status === "uploaded") {
 				nextQueue = recordingUploadQueueReducer(nextQueue, {
 					type: "externalProcessing",
@@ -386,7 +386,7 @@ export function RecordingUploadProvider({ children }: { children: ReactNode }) {
 						try {
 							return {
 								id: job.id,
-								updates: await getScreenRecordingUpdates(job.id),
+								updates: await getScreenRecordingStatus(job.id),
 							};
 						} catch {
 							return null;

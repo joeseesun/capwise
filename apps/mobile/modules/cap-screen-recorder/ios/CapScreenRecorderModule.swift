@@ -102,7 +102,11 @@ public final class CapScreenRecorderModule: Module {
     }
 
     AsyncFunction("getRecordingUpdates") { (recordingId: String) in
-      try self.getRecordingUpdates(recordingId)
+      try self.getRecordingUpdates(recordingId, includeSegments: true)
+    }
+
+    AsyncFunction("getRecordingStatus") { (recordingId: String) in
+      try self.getRecordingUpdates(recordingId, includeSegments: false)
     }
 
     AsyncFunction("cancelRecording") { (recordingId: String) in
@@ -191,7 +195,8 @@ public final class CapScreenRecorderModule: Module {
   }
 
   private func getRecordingUpdates(
-    _ recordingId: String
+    _ recordingId: String,
+    includeSegments: Bool
   ) throws -> [String: Any] {
     try validateRecordingId(recordingId)
     let root = try recordingsRoot()
@@ -221,7 +226,8 @@ public final class CapScreenRecorderModule: Module {
       recordingsRoot: root
     )
     try recoverStalledUpload(&manifest, at: url)
-    let segments: [[String: Any]] = manifest.segments.map { segment in
+    let includeManifestSegments = includeSegments || manifest.status == "finished"
+    let segments: [[String: Any]] = (includeManifestSegments ? manifest.segments : []).map { segment in
       [
         "track": segment.track,
         "type": segment.type,

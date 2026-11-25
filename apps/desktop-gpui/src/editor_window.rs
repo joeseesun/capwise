@@ -2920,7 +2920,6 @@ impl EditorWindow {
         if !has_cards(&previous) && !has_cards(&self.project) {
             return Ok(());
         }
-        let previous = previous.clone();
         crate::editor_title_cards::normalize_edit(
             &mut self.project,
             &previous,
@@ -6035,6 +6034,7 @@ impl EditorWindow {
     ) {
         let mut moved = None;
         self.edit_live(
+            None,
             |timeline| {
                 moved = edits::move_segment_to_lane(timeline, kind, index, target);
                 moved.is_some()
@@ -6297,8 +6297,7 @@ impl EditorWindow {
         }
         if !self.lane_reorder_position_valid(reorder.source, reorder.pointer_x, reorder.pointer_y) {
             if reorder.paused {
-                let config = self.project.clone();
-                self.history.resume(&config);
+                self.history.resume(&self.project);
             }
             cx.notify();
             return;
@@ -6323,8 +6322,7 @@ impl EditorWindow {
             self.note_edit("reorder-lane", Some(reorder.source.kind));
         }
         if reorder.paused {
-            let config = self.project.clone();
-            self.history.resume(&config);
+            self.history.resume(&self.project);
         }
         cx.notify();
     }
@@ -6334,8 +6332,7 @@ impl EditorWindow {
             return;
         };
         if reorder.paused {
-            let config = self.project.clone();
-            self.history.resume(&config);
+            self.history.resume(&self.project);
         }
         cx.notify();
     }
@@ -6548,6 +6545,7 @@ impl EditorWindow {
                     return;
                 }
                 self.edit_live(
+                    None,
                     |timeline| {
                         edits::move_segment(timeline, track, index, start + shift, end + shift)
                     },
@@ -6570,6 +6568,7 @@ impl EditorWindow {
                 self.drag_snap_time = engaged;
                 let (track, index) = (drag.track, drag.index);
                 self.edit_live(
+                    Some((track, index)),
                     |timeline| {
                         crate::editor_keyframes::keyframed_mut(timeline, track, index)
                             .and_then(|segment| {
@@ -6597,6 +6596,7 @@ impl EditorWindow {
                     return;
                 }
                 if self.edit_live(
+                    None,
                     |timeline| edits::set_segment_start(timeline, track, index, next),
                     cx,
                 ) {
@@ -6621,6 +6621,7 @@ impl EditorWindow {
                     return;
                 }
                 if self.edit_live(
+                    None,
                     |timeline| edits::set_segment_end(timeline, track, index, next),
                     cx,
                 ) {
@@ -6703,6 +6704,7 @@ impl EditorWindow {
                             return;
                         }
                         self.edit_live(
+                            None,
                             |timeline| edits::set_segment_end(timeline, drag.track, index, clamped),
                             cx,
                         );
@@ -7223,8 +7225,27 @@ impl EditorWindow {
         })
     }
 
+    fn refresh_timeline_keyframes(&mut self, track: TrackKind, index: usize) -> bool {
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return false;
+        };
+        if timeline
+            .text_segments
+            .iter()
+            .any(|segment| segment.title_card.is_some())
+        {
+            return false;
+        }
+        let Some(segment) = crate::editor_keyframes::keyframed(timeline, track, index) else {
+            return false;
+        };
+        self.timeline
+            .update_segment_keyframes(track, index, segment.visible_keyframe_times())
+    }
+
     fn edit_live(
         &mut self,
+        retimed_keyframes: Option<(TrackKind, usize)>,
         change: impl FnOnce(&mut TimelineConfiguration) -> bool,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -7249,7 +7270,13 @@ impl EditorWindow {
             return false;
         }
         self.history.record(&self.project);
-        self.rebuild_timeline();
+        if retimed_keyframes
+            .is_some_and(|(track, index)| self.refresh_timeline_keyframes(track, index))
+        {
+            self.dismiss_transient_menus();
+        } else {
+            self.rebuild_timeline();
+        }
         self.publish_project();
         cx.notify();
         true
@@ -7880,8 +7907,7 @@ impl EditorWindow {
         }
 
         if drag.paused {
-            let config = self.project.clone();
-            self.history.resume(&config);
+            self.history.resume(&self.project);
         }
         if drag.moved && drag.track != TrackKind::Caption {
             self.schedule_save(window, cx);
