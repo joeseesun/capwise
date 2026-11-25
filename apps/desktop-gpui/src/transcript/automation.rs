@@ -65,6 +65,7 @@ fn seeded_captions(words: usize, duration: f64) -> cap_project::CaptionsData {
             .chunks(6)
             .enumerate()
             .map(|(index, chunk)| cap_project::CaptionSegment {
+                manual_timing: None,
                 id: format!("segment-{index}"),
                 start: chunk[0].start,
                 end: chunk[chunk.len() - 1].end,

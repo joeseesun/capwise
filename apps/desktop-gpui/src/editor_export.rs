@@ -3902,6 +3902,7 @@ mod tests {
         cap_project::ProjectConfiguration {
             captions: Some(cap_project::CaptionsData {
                 segments: vec![cap_project::CaptionSegment {
+                    manual_timing: None,
                     id: "one".into(),
                     start: 0.,
                     end: 1.,

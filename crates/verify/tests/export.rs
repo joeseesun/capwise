@@ -1709,6 +1709,7 @@ fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
         segments: segments
             .iter()
             .map(|segment| cap_project::CaptionSegment {
+                manual_timing: None,
                 id: segment.id.clone(),
                 start: segment.start as f32,
                 end: segment.end as f32,

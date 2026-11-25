@@ -330,6 +330,7 @@ pub fn segments_from_lines(
                 break;
             }
             CaptionSegment {
+                manual_timing: None,
                 id: format!("{id_prefix}{index}"),
                 start: words.first().map_or(0.0, |word| word.start),
                 end: words.last().map_or(0.0, |word| word.end),

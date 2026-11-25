@@ -24,6 +24,7 @@ fn fixture(clips: usize, words_per_clip: usize) -> (ProjectConfiguration, Vec<f6
         .chunks(6)
         .enumerate()
         .map(|(index, words)| CaptionSegment {
+            manual_timing: None,
             id: format!("caption-{index}"),
             start: words[0].start,
             end: words.last().unwrap().end,
@@ -247,6 +248,7 @@ fn baseline_synchronize(project: &mut ProjectConfiguration, recording_durations:
                     })
                     .collect();
                 Some(CaptionSegment {
+                    manual_timing: None,
                     id: caption.id.clone(),
                     start,
                     end,

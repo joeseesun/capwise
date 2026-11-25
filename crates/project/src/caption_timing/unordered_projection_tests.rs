@@ -37,6 +37,7 @@ fn fixture(
         .map(|index| {
             let start = index as f32 * 4.0;
             CaptionSegment {
+                manual_timing: None,
                 id: format!("caption-{index}"),
                 start,
                 end: start + 3.9,
@@ -228,6 +229,7 @@ fn baseline_projection(
             .iter()
             .map(clamp_caption_segment_words)
             .map(|segment| MappedCaption {
+                manual_timing: false,
                 id: segment.id,
                 start: f64::from(segment.start),
                 end: f64::from(segment.end),
@@ -328,6 +330,7 @@ fn baseline_projection(
                     .last()
                     .map_or(f64::from(caption.end), |word| f64::from(word.end));
                 mapped_caption_segments.push(MappedCaption {
+                    manual_timing: false,
                     id: caption.id.clone(),
                     start,
                     end,
@@ -344,6 +347,7 @@ fn baseline_projection(
                 };
                 let (start, end) = hold_adjusted(start, end);
                 mapped_caption_segments.push(MappedCaption {
+                    manual_timing: false,
                     id: caption.id.clone(),
                     start,
                     end,
@@ -383,6 +387,7 @@ fn baseline_derivation(
         .map(|segment| {
             let overrides = overrides_by_source_id.get(source_caption_id(&segment.id));
             CaptionTrackSegment {
+                manual_timing: false,
                 id: segment.id,
                 start: segment.start,
                 end: segment.end,

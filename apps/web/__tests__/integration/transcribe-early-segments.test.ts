@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Option } from "effect";
+import { Effect, Option, Stream } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { assemblyAIEditResponse } from "../fixtures/assemblyai-edit-response";
 
@@ -50,6 +50,7 @@ const videoRow = vi.hoisted(() => ({
 const state = vi.hoisted(() => ({
 	editRows: [] as unknown[],
 	fakeAudioPath: "",
+	storageProvider: "s3" as "s3" | "googleDrive",
 }));
 
 vi.mock("@cap/env", () => ({
@@ -120,6 +121,7 @@ vi.mock("@cap/web-backend/src/Storage/index", () => ({
 			pipe: (runner: (value: unknown) => unknown) =>
 				runner([
 					{
+						provider: state.storageProvider,
 						putObject: mocks.putObject,
 						deleteObject: mocks.deleteObject,
 						getObject: mocks.getObject,
@@ -192,6 +194,7 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 	beforeEach(async () => {
 		mocks.updates.length = 0;
 		state.editRows = [];
+		state.storageProvider = "s3";
 		videoRow.duration = null;
 		videoRow.source = { type: "desktopSegments" };
 		mocks.transcribe.mockReset();
@@ -233,6 +236,23 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 
 	it("transcribes straight from segment audio before any mux exists", async () => {
 		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		let uploaded: Buffer | undefined;
+		mocks.putObject.mockImplementationOnce(
+			(
+				_key: string,
+				body: Stream.Stream<Uint8Array, Error>,
+				fields: { contentType: string; contentLength: number },
+			) => ({
+				pipe: async () => {
+					const chunks = await Effect.runPromise(Stream.runCollect(body));
+					uploaded = Buffer.concat(Array.from(chunks));
+					expect(fields).toEqual({
+						contentType: "audio/mp4",
+						contentLength: 9,
+					});
+				},
+			}),
+		);
 
 		const result = await transcribeVideoWorkflow({
 			videoId: "video-123",
@@ -242,6 +262,7 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 		});
 
 		expect(result.success).toBe(true);
+		expect(uploaded?.toString()).toBe("segsegseg");
 		expect(mocks.transcribe).toHaveBeenCalledTimes(1);
 
 		const signedKeys = mocks.getInternalSignedObjectUrl.mock.calls.map(
@@ -363,6 +384,51 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 		expect(mocks.transcribe).not.toHaveBeenCalled();
 		expect(mocks.updates).toContainEqual({ transcriptionStatus: "NO_AUDIO" });
 		expect(mocks.updates).not.toContainEqual({ transcriptionStatus: "ERROR" });
+	});
+
+	it("uploads the same bytes when storage rejects a streaming PUT", async () => {
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		mocks.putObject.mockImplementationOnce(() => ({
+			pipe: async () => {
+				throw new Error("Streaming PUT is unsupported");
+			},
+		}));
+
+		const result = await transcribeVideoWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			aiGenerationEnabled: false,
+			earlyFromSegments: true,
+		});
+
+		expect(result.success).toBe(true);
+		expect(mocks.putObject).toHaveBeenNthCalledWith(
+			2,
+			"user-456/video-123/audio-temp.mp3",
+			Buffer.from("segsegseg"),
+			{ contentType: "audio/mp4", contentLength: 9 },
+		);
+		expect(mocks.transcribe).toHaveBeenCalledTimes(1);
+	});
+
+	it("uses the buffer upload for Google Drive storage", async () => {
+		state.storageProvider = "googleDrive";
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+
+		const result = await transcribeVideoWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			aiGenerationEnabled: false,
+			earlyFromSegments: true,
+		});
+
+		expect(result.success).toBe(true);
+		expect(mocks.putObject).toHaveBeenNthCalledWith(
+			1,
+			"user-456/video-123/audio-temp.mp3",
+			Buffer.from("segsegseg"),
+			{ contentType: "audio/mp4", contentLength: 9 },
+		);
 	});
 
 	it("falls back to segment audio in the normal path when no muxed source exists", async () => {

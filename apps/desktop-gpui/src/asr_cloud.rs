@@ -867,6 +867,7 @@ fn segment_from_line(index: usize, mut words: Vec<CaptionWord>) -> CaptionSegmen
         }
     }
     CaptionSegment {
+        manual_timing: None,
         id: format!("segment-{index}"),
         start: words.first().map_or(0.0, |word| word.start),
         end: words.last().map_or(0.0, |word| word.end),

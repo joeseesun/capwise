@@ -2,7 +2,7 @@ use std::{borrow::Cow, path::PathBuf, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_editor::EditorInstance;
-use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, TimelineFrameMapping, XY};
+use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms, RecordingSegmentDecoders,
     RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
@@ -346,25 +346,18 @@ async fn render_frame(
         layers_cache,
     } = source;
     let project_config = &Arc::new(project_config.clone());
-    let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
-        if timeline.transitions.is_empty() {
-            return None;
-        }
-        match timeline.get_frame_mapping(frame_time) {
-            Some(TimelineFrameMapping::Transition {
-                outgoing,
-                kind,
-                progress,
-                ..
-            }) => Some((outgoing, kind, progress)),
-            _ => None,
-        }
-    });
-    let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
+    let Some(mapping) = project_config
+        .timeline
+        .as_ref()
+        .and_then(|timeline| timeline.get_frame_mapping(frame_time))
+    else {
         return Err(ExportError::Other(
             "Frame time is outside video duration".to_string(),
         ));
     };
+    let transition_mapping = mapping.outgoing_transition();
+    let source = mapping.primary_source();
+    let (segment_time, segment) = (source.source_time, source.segment);
 
     let segment_media = segments
         .get(segment.recording_clip as usize)

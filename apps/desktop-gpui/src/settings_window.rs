@@ -1005,7 +1005,7 @@ impl SettingsWindow {
         cx.spawn_in(window, async move |this, cx| {
             let windows = cx
                 .background_executor()
-                .spawn(async { crate::devices::DeviceSnapshot::enumerate().windows })
+                .spawn(async { crate::devices::list_windows() })
                 .await;
             this.update(cx, |this, cx| {
                 this.windows = windows;

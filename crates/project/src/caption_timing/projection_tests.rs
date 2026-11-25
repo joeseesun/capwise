@@ -58,6 +58,7 @@ fn borrowed_caption_projection_matches_sanitized_copy() {
         .flat_map(|(index, start)| {
             times.iter().enumerate().flat_map(move |(other, end)| {
                 [false, true].map(|with_words| CaptionSegment {
+                    manual_timing: None,
                     id: format!("caption-{index}-{other}-{with_words}"),
                     start: *start,
                     end: *end,
@@ -111,6 +112,7 @@ fn borrowed_projection_preserves_take_offsets_and_nonfinite_timestamps() {
         .map(|index| {
             let start = index as f32 * 0.5;
             CaptionSegment {
+                manual_timing: None,
                 id: format!("caption-{index}"),
                 start,
                 end: start + 0.75,
@@ -147,6 +149,7 @@ fn benchmark_caption_projection_allocations() {
         .map(|index| {
             let start = index as f32 * 4.0;
             CaptionSegment {
+                manual_timing: None,
                 id: format!("caption-{index}"),
                 start,
                 end: start + 4.0,
@@ -239,6 +242,7 @@ fn baseline_projection(
         return sanitized
             .into_iter()
             .map(|segment| MappedCaption {
+                manual_timing: false,
                 id: segment.id,
                 start: f64::from(segment.start),
                 end: f64::from(segment.end),
@@ -319,6 +323,7 @@ fn baseline_projection(
                     .last()
                     .map_or(f64::from(caption.end), |word| f64::from(word.end));
                 mapped_caption_segments.push(MappedCaption {
+                    manual_timing: false,
                     id: caption.id.clone(),
                     start,
                     end,
@@ -335,6 +340,7 @@ fn baseline_projection(
                 };
                 let (start, end) = hold_adjusted(start, end);
                 mapped_caption_segments.push(MappedCaption {
+                    manual_timing: false,
                     id: caption.id.clone(),
                     start,
                     end,
@@ -391,6 +397,7 @@ fn baseline_derivation(
         .map(|segment| {
             let overrides = overrides_by_source_id.get(source_caption_id(&segment.id));
             CaptionTrackSegment {
+                manual_timing: false,
                 id: segment.id.clone(),
                 start: segment.start,
                 end: segment.end,
@@ -412,6 +419,7 @@ fn caption_overrides_match_owned_map_for_repeated_source_ids() {
     let captions: Vec<_> = ["shared", "plain", "", "shared::edlcustom"]
         .into_iter()
         .map(|id| CaptionSegment {
+            manual_timing: None,
             id: id.into(),
             start: 0.0,
             end: 8.0,
@@ -469,6 +477,7 @@ fn caption_overrides_match_owned_map_for_repeated_source_ids() {
 #[test]
 fn caption_overrides_preserve_nonfinite_float_bits() {
     let captions = [CaptionSegment {
+        manual_timing: None,
         id: "spoken".into(),
         start: 0.0,
         end: 4.0,
@@ -531,6 +540,7 @@ fn mapping_bounds_preserve_shared_edges_overlaps_duplicates_and_fallbacks() {
         .into_iter()
         .enumerate()
         .map(|(index, start)| CaptionSegment {
+            manual_timing: None,
             id: format!("edge-{index}"),
             start: if with_words { -100.0 } else { start },
             end: if with_words { -99.0 } else { start + 2.5 },

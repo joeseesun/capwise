@@ -177,6 +177,7 @@ fn reference_segments(tokens: &[CaptionWord]) -> Vec<CaptionSegment> {
         .into_iter()
         .enumerate()
         .map(|(i, group)| CaptionSegment {
+            manual_timing: None,
             id: format!("segment-{i}"),
             start: group[0].start,
             end: group[group.len() - 1].end,
@@ -755,6 +756,7 @@ fn trimmed_transcription_extracts_only_used_audio_and_restores_source_times() {
                     let end = offset + 0.5;
                     offset += (range.end - range.start) as f32;
                     CaptionSegment {
+                        manual_timing: None,
                         id: "segment-0".into(),
                         start,
                         end,
@@ -963,6 +965,7 @@ fn source_timestamps_clamp_words_and_wordless_segments_at_junctions() {
         },
     ]);
     segments.push(CaptionSegment {
+        manual_timing: None,
         start: 1.75,
         end: 2.25,
         text: "no words".into(),
@@ -1017,6 +1020,7 @@ fn source_timestamps_with_empty_ranges_produce_no_captions() {
         hidden: false,
     }]);
     segments.push(CaptionSegment {
+        manual_timing: None,
         start: 0.25,
         end: 0.5,
         text: "no words".into(),

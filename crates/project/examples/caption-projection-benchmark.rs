@@ -15,6 +15,7 @@ fn fixture(seconds: usize, clips: usize, spacing: usize) -> ProjectConfiguration
         .map(|index| {
             let start = 5.0 + (index * 4) as f32;
             CaptionSegment {
+                manual_timing: None,
                 id: format!("caption-{index}"),
                 start,
                 end: start + 4.0,

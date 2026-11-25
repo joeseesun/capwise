@@ -1542,14 +1542,53 @@ impl TimelineModel {
         }
     }
 
+    pub fn update_segment_keyframes(
+        &mut self,
+        track: TrackKind,
+        index: usize,
+        times: Vec<f64>,
+    ) -> bool {
+        let segments = match track {
+            TrackKind::Image => &mut self.image,
+            TrackKind::Text => &mut self.text,
+            TrackKind::Shape => &mut self.shape,
+            TrackKind::Mask => &mut self.mask,
+            _ => return false,
+        };
+        let Some(segment) = segments.get_mut(index) else {
+            return false;
+        };
+        segment.keyframes = times.into();
+        true
+    }
+
     /// Build the whole model from a project config plus the two facts that do
     /// not live in it: whether the recording has a camera at all
     /// (`meta().hasCamera`, gating the scene row at `TL/index.tsx:200`) and
     /// whether more than one recording clip exists (which decides `"Clip"` vs
     /// `"Clip N"`, `TL/ClipTrack.tsx:617-620`).
     pub fn build(config: &ProjectConfiguration, has_camera: bool, multiple_clips: bool) -> Self {
-        let Some(timeline) = config.timeline.as_ref() else {
+        if config.timeline.is_none() {
             return Self::default();
+        }
+        Self::build_with_lanes(
+            config,
+            has_camera,
+            multiple_clips,
+            &TrackLanes::from_project(config, has_camera),
+        )
+    }
+
+    pub fn build_with_lanes(
+        config: &ProjectConfiguration,
+        has_camera: bool,
+        multiple_clips: bool,
+        lanes: &TrackLanes,
+    ) -> Self {
+        let Some(timeline) = config.timeline.as_ref() else {
+            let mut model = Self::default();
+            model.rows = build_rows(config, &model, has_camera, lanes);
+            return model;
         };
 
         let holds = timeline.hold_windows();
@@ -1759,22 +1798,6 @@ impl TimelineModel {
             waveform_paths: Arc::default(),
             clip_ghost_gap: None,
         };
-        model.rows = build_rows(
-            config,
-            &model,
-            has_camera,
-            &TrackLanes::from_project(config, has_camera),
-        );
-        model
-    }
-
-    pub fn build_with_lanes(
-        config: &ProjectConfiguration,
-        has_camera: bool,
-        multiple_clips: bool,
-        lanes: &TrackLanes,
-    ) -> Self {
-        let mut model = Self::build(config, has_camera, multiple_clips);
         model.rows = build_rows(config, &model, has_camera, lanes);
         model
     }
@@ -4288,6 +4311,37 @@ mod tests {
             assert!(!transform.reveal_range(start, end, total));
             assert_eq!(transform, previous);
         }
+    }
+
+    #[test]
+    fn retimed_overlay_keyframes_match_a_full_rebuild() {
+        let mut config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 20.0 }],
+                "zoomSegments": [],
+                "imageSegments": [
+                    { "start": 3.0, "end": 6.0, "path": "image.png" },
+                    { "start": 7.0, "end": 9.0, "path": "other.png" }
+                ]
+            }
+        }))
+        .unwrap();
+        let mut model = TimelineModel::build(&config, false, false);
+        let image = &mut config.timeline.as_mut().unwrap().image_segments[0];
+        assert!(image.add_keyframe_at(4.0, 0.01));
+        assert!(image.add_keyframe_at(5.0, 0.01));
+        assert_eq!(image.retime_keyframe(0, 4.5, 0.01), Some(0));
+        assert!(model.update_segment_keyframes(
+            TrackKind::Image,
+            0,
+            image.visible_keyframe_times()
+        ));
+        let rebuilt = TimelineModel::build(&config, false, false);
+        assert_eq!(model.rows, rebuilt.rows);
+        assert_eq!(&*model.image[0].keyframes, &[1.5, 2.0]);
+        assert_eq!(model.image[0].keyframes, rebuilt.image[0].keyframes);
+        assert!(model.image[1].keyframes.is_empty());
+        assert!(!model.update_segment_keyframes(TrackKind::Audio, 0, Vec::new()));
     }
 
     const AUDIO_SAMPLE_RATE: usize = 48_000;

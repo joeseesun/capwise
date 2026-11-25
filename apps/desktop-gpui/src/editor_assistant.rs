@@ -2847,6 +2847,7 @@ mod tests {
         let mut project = project();
         project.captions = Some(cap_project::CaptionsData {
             segments: vec![cap_project::CaptionSegment {
+                manual_timing: None,
                 id: "s1".into(),
                 start: 0.,
                 end: 3.,

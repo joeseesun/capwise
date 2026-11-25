@@ -52,7 +52,7 @@ vi.mock("react-native", () => ({
 vi.mock("@/api/mobile", () => ({ uploadToTarget }));
 vi.mock("../../modules/cap-screen-recorder", () => ({
 	cancelScreenRecording: screenRecordingState.cancel,
-	getScreenRecordingUpdates: screenRecordingState.getUpdates,
+	getScreenRecordingStatus: screenRecordingState.getUpdates,
 }));
 vi.mock("@/auth/AuthContext", () => ({
 	useAuth: () => ({

@@ -24,9 +24,9 @@
 
 use cap_project::{
     AudioTrackSegment, Camera3DBlur, Camera3DBlurMode, Camera3DKeyframe, Camera3DProperties,
-    Camera3DSegment, CaptionTrackSegment, KeyboardTrackSegment, MaskKind, MaskSegment, SceneMode,
-    SceneSegment, SplitLayout, TextAlign, TextAnimation, TextBackgroundStyle, TextLayout,
-    TextSegment, TimelineConfiguration, XY, ZoomMode, ZoomSegment, mask_effect_contract,
+    Camera3DSegment, KeyboardTrackSegment, MaskKind, MaskSegment, SceneMode, SceneSegment,
+    SplitLayout, TextAlign, TextAnimation, TextBackgroundStyle, TextLayout, TextSegment,
+    TimelineConfiguration, XY, ZoomMode, ZoomSegment, mask_effect_contract,
 };
 use gpui::{
     AnyElement, AppContext, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -2901,11 +2901,48 @@ impl EditorWindow {
             }
             input
         });
+        let pending_caption_time = std::cell::RefCell::<Option<(String, String)>>::new(None);
         self.push_text_subscription(cx.subscribe_in(
             &input,
             window,
-            move |this: &mut Self, _input, event: &ui::TextInputEvent, window, cx| {
-                this.on_field_event(key, event, window, cx)
+            move |this: &mut Self, input, event: &ui::TextInputEvent, window, cx| {
+                if let FieldKey::CaptionStart(index) | FieldKey::CaptionEnd(index) = key {
+                    if matches!(event, ui::TextInputEvent::Changed) {
+                        let text = input.read(cx).text().to_string();
+                        let mut pending = pending_caption_time.borrow_mut();
+                        if let Some((_, draft)) = pending.as_mut() {
+                            *draft = text;
+                        } else if let Some(caption) = this.caption_segments().get(index) {
+                            *pending = Some((caption.id.clone(), text));
+                        }
+                        return;
+                    }
+                    let end = matches!(key, FieldKey::CaptionEnd(_));
+                    if let Some((id, text)) = pending_caption_time.take() {
+                        let captions = this.caption_segments();
+                        let index = captions
+                            .get(index)
+                            .filter(|caption| caption.id == id)
+                            .map(|_| index)
+                            .or_else(|| captions.iter().position(|caption| caption.id == id));
+                        if let Some(index) = index {
+                            this.commit_caption_time_entry(index, end, &text, window, cx);
+                        }
+                    }
+                    if !matches!(event, ui::TextInputEvent::Blurred) {
+                        let focus = this.focus_handle_for_menu();
+                        window.focus(&focus, cx);
+                    }
+                    return;
+                }
+                this.on_field_event(key, event, window, cx);
+                if matches!(key, FieldKey::CaptionText(_))
+                    && matches!(event, ui::TextInputEvent::Changed)
+                    && (!window.is_window_active() || !input.read(cx).is_focused(window))
+                {
+                    this.commit_field(key, true, window, cx);
+                    this.end_field_edit(cx);
+                }
             },
         ));
         self.fields.insert(key, input);
@@ -3176,10 +3213,32 @@ impl EditorWindow {
             if matches!(key, FieldKey::CaptionText(_)) {
                 self.commit_caption_text_draft(cx);
             }
-            let config = self.project.clone();
-            self.history.resume(&config);
+            self.history.resume(&self.project);
             cx.notify();
         }
+    }
+
+    fn commit_caption_time_entry(
+        &mut self,
+        index: usize,
+        editing_end: bool,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(value) = ui::parse_number(text).filter(|value| value.is_finite()) else {
+            return;
+        };
+        let Some(segment) = self.caption_segments().get(index) else {
+            return;
+        };
+        let mut requested = [segment.start, segment.end];
+        let edge = usize::from(editing_end);
+        if text.trim() == format!("{:.2}", requested[edge]) {
+            return;
+        }
+        requested[edge] = value.clamp(0.0, self.total_duration());
+        self.commit_caption_timing(index, requested, window, cx);
     }
 
     fn commit_field(
@@ -3192,6 +3251,16 @@ impl EditorWindow {
         let Some(input) = self.field(key).cloned() else {
             return;
         };
+        if let FieldKey::CaptionText(index) = key {
+            if final_commit {
+                self.commit_caption_text_draft(cx);
+                self.queue_caption_translation_update(window, cx);
+                self.note_project_edit("caption-text");
+            } else {
+                self.queue_sidebar_caption_text(index, input.read(cx).shared_text(), cx);
+            }
+            return;
+        }
         let text = input.read(cx).text().to_string();
         match key {
             FieldKey::StyleName(index) | FieldKey::ImageName(index) => {
@@ -3317,15 +3386,6 @@ impl EditorWindow {
                     }
                 });
             }
-            FieldKey::CaptionText(index) => {
-                if final_commit {
-                    self.commit_caption_text_draft(cx);
-                    self.queue_caption_translation_update(window, cx);
-                    self.note_project_edit("caption-text");
-                } else {
-                    self.queue_sidebar_caption_text(index, text, cx);
-                }
-            }
             FieldKey::AudioName(index) => {
                 self.edit_audio_segment("audio-name", index, window, cx, move |segment| {
                     if segment.name.as_deref() == Some(text.as_str()) {
@@ -3361,21 +3421,7 @@ impl EditorWindow {
                     }
                 });
             }
-            // The four `<Input type="number">` boxes commit `onChange`, which
-            // in Solid is the *change* event -- blur or Enter, not every
-            // keystroke (`:4280-4290`). So they only write on a final commit.
-            FieldKey::CaptionStart(index) | FieldKey::CaptionEnd(index) => {
-                if !final_commit {
-                    return;
-                }
-                let Some(value) = ui::parse_number(&text) else {
-                    return;
-                };
-                let start = matches!(key, FieldKey::CaptionStart(_));
-                self.edit_caption_segment("caption-timing", index, window, cx, move |segment| {
-                    commit_segment_timing(segment, start, &text, value)
-                });
-            }
+            FieldKey::CaptionStart(_) | FieldKey::CaptionEnd(_) => {}
             FieldKey::KeyboardStart(index) | FieldKey::KeyboardEnd(index) => {
                 if !final_commit {
                     return;
@@ -3549,43 +3595,6 @@ segment_editor!(
 );
 segment_editor!(edit_audio_segment, audio_segments, AudioTrackSegment);
 
-impl EditorWindow {
-    /// The captions editor is hand-written where its siblings use the macro:
-    /// after the track-segment change, the edit is routed back onto the
-    /// source-time caption master (`updateSelectedCaption`,
-    /// `CaptionsTab.tsx:257-315`) so the re-derivation that follows every
-    /// clip edit cannot revert it.
-    pub(crate) fn edit_caption_segment(
-        &mut self,
-        reason: &'static str,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        change: impl FnOnce(&mut CaptionTrackSegment) -> bool,
-    ) {
-        let recording_durations = self
-            .summary()
-            .map(|summary| summary.clip_display_durations.clone())
-            .unwrap_or_default();
-        self.edit_project(reason, window, cx, move |project| {
-            let Some(timeline) = project.timeline.as_mut() else {
-                return false;
-            };
-            let Some(segment) = timeline.caption_segments.get_mut(index) else {
-                return false;
-            };
-            if !change(segment) {
-                return false;
-            }
-            crate::transcription::write_caption_edit_to_source(
-                project,
-                index,
-                &recording_durations,
-            );
-            true
-        });
-    }
-}
 segment_editor!(
     edit_keyboard_segment,
     keyboard_segments,

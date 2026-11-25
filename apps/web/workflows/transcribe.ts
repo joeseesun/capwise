@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { db } from "@cap/database";
@@ -18,7 +18,7 @@ import {
 	Video,
 } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { Either, Option, Schema } from "effect";
+import { Either, Option, Schema, Stream } from "effect";
 import { FatalError } from "workflow";
 import { start } from "workflow/api";
 import {
@@ -741,14 +741,26 @@ async function extractAudioFromSegmentsImpl(
 			// (which is not available in the serverless runtime). The temp object
 			// keeps the same key regardless of container so cleanupTempAudio's
 			// contract is untouched.
-			const audioBuffer = await fs.readFile(concatPath);
-
 			const audioKey = `${userId}/${videoId}/${tempAudioFilename}`;
-			await bucket
-				.putObject(audioKey, audioBuffer, {
-					contentType: "audio/mp4",
-				})
-				.pipe(runWorkflowPromise);
+			const fields = { contentType: "audio/mp4", contentLength: totalBytes };
+			const audioStream = Stream.suspend(() =>
+				Stream.fromAsyncIterable<Uint8Array, Error>(
+					createReadStream(concatPath),
+					(cause) => new Error("Could not read assembled audio", { cause }),
+				),
+			);
+			const uploadBuffered = async () =>
+				bucket
+					.putObject(audioKey, await fs.readFile(concatPath), fields)
+					.pipe(runWorkflowPromise);
+			if (bucket.provider === "s3") {
+				await bucket
+					.putObject(audioKey, audioStream, fields)
+					.pipe(runWorkflowPromise)
+					.catch(uploadBuffered);
+			} else {
+				await uploadBuffered();
+			}
 
 			const audioSignedUrl = await bucket
 				.getInternalSignedObjectUrl(audioKey)

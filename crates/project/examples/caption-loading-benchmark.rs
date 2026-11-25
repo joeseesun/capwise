@@ -20,6 +20,7 @@ fn main() {
             source_timed: true,
             segments: (0..count)
                 .map(|index| CaptionSegment {
+                    manual_timing: None,
                     id: format!("source-{index}"),
                     start: index as f32 * 4.0,
                     end: index as f32 * 4.0 + 4.0,

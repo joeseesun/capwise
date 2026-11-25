@@ -3,8 +3,8 @@
 //!
 //! The renderer keeps laying the caption out but skips drawing it while the
 //! box is open, so the box sits exactly where the caption is without doubling
-//! it. Every keystroke goes through the same live path as the sidebar field,
-//! and one sentence is one undo step.
+//! it. Edits stay in the input until they are committed, and one sentence is
+//! one undo step.
 //!
 //! Keys, matched before the field's own bindings and never while an input
 //! method is composing:
@@ -218,8 +218,6 @@ pub(crate) fn install_caption_keys(
     })
 }
 
-pub(crate) const CAPTION_TEXT_IDLE: std::time::Duration = std::time::Duration::from_millis(650);
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CaptionTextOwner {
     Sidebar,
@@ -229,7 +227,7 @@ enum CaptionTextOwner {
 pub(crate) struct CaptionTextDraft {
     id: String,
     owner: CaptionTextOwner,
-    text: String,
+    text: SharedString,
 }
 
 impl EditorWindow {
@@ -244,7 +242,7 @@ impl EditorWindow {
             .is_some_and(|edit| !edit.auditioning)
     }
 
-    fn caption_segments(&self) -> &[CaptionTrackSegment] {
+    pub(crate) fn caption_segments(&self) -> &[CaptionTrackSegment] {
         self.project
             .timeline
             .as_ref()
@@ -399,8 +397,11 @@ impl EditorWindow {
                     }
                     match event {
                         ui::TextInputEvent::Changed => {
-                            let text = input.read(cx).text().to_owned();
+                            let text = input.read(cx).shared_text();
                             this.caption_edit_typed(input_line, text, cx);
+                            if !window.is_window_active() || !input.read(cx).is_focused(window) {
+                                this.commit_caption_text_draft(cx);
+                            }
                         }
                         ui::TextInputEvent::Cancelled => this.cancel_caption_edit(window, cx),
                         ui::TextInputEvent::Confirmed => {}
@@ -472,7 +473,7 @@ impl EditorWindow {
     pub(crate) fn queue_sidebar_caption_text(
         &mut self,
         index: usize,
-        text: String,
+        text: SharedString,
         cx: &mut Context<Self>,
     ) {
         if let Some(segment) = self.caption_segments().get(index) {
@@ -480,7 +481,12 @@ impl EditorWindow {
         }
     }
 
-    fn caption_edit_typed(&mut self, line: CaptionLine, text: String, cx: &mut Context<Self>) {
+    fn caption_edit_typed(
+        &mut self,
+        line: CaptionLine,
+        text: SharedString,
+        cx: &mut Context<Self>,
+    ) {
         let Some(edit) = self.caption_edit.as_mut() else {
             return;
         };
@@ -499,7 +505,7 @@ impl EditorWindow {
         &mut self,
         id: String,
         owner: CaptionTextOwner,
-        text: String,
+        text: SharedString,
         cx: &mut Context<Self>,
     ) {
         if self
@@ -510,18 +516,12 @@ impl EditorWindow {
             self.commit_caption_text_draft(cx);
         }
         self.caption_text_draft = Some(CaptionTextDraft { id, owner, text });
-        self.caption_text_commit_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(CAPTION_TEXT_IDLE).await;
-            this.update(cx, |this, cx| this.commit_caption_text_draft(cx))
-                .ok();
-        }));
     }
 
     pub(crate) fn apply_caption_text_draft(&mut self) -> bool {
         let Some(draft) = self.caption_text_draft.take() else {
             return false;
         };
-        self.caption_text_commit_task = None;
         let Some(index) = self.caption_index(&draft.id) else {
             return false;
         };
@@ -530,7 +530,7 @@ impl EditorWindow {
                 self.write_caption_translation(index, &draft.text)
             }
             CaptionTextOwner::Sidebar | CaptionTextOwner::Canvas(CaptionLine::Source) => {
-                self.edit_caption_text_live(index, draft.text)
+                self.write_caption_text(index, draft.text.to_string())
             }
         }
     }
@@ -627,7 +627,6 @@ impl EditorWindow {
             .is_some_and(|draft| matches!(draft.owner, CaptionTextOwner::Canvas(_)))
         {
             self.caption_text_draft = None;
-            self.caption_text_commit_task = None;
         }
         if edit.auditioning && self.playing {
             self.stop_playback(cx);
@@ -778,8 +777,8 @@ impl EditorWindow {
                     timeline.caption_segments[index + 1].text =
                         segment.text[byte..].trim().to_owned();
                 }
-                crate::transcription::write_caption_edit_to_source(project, index, &durations);
-                crate::transcription::write_caption_edit_to_source(project, index + 1, &durations);
+                crate::transcription::write_caption_text_to_source(project, index);
+                crate::transcription::write_caption_text_to_source(project, index + 1);
             }
             if let (Some(translation), Some(captions)) = (translation, project.captions.as_mut()) {
                 captions.settings.translations.insert(tail_id, translation);

@@ -4,7 +4,7 @@ use crate::playback::{self, PlaybackHandle, PlaybackStartError};
 use cap_project::StudioRecordingMeta;
 use cap_project::{
     CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
-    TimelineFrameMapping, TimelineSegment, XY,
+    TimelineSegment, XY,
 };
 use cap_rendering::{
     CursorEventOrder, PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms,
@@ -1153,28 +1153,20 @@ impl EditorInstance {
                     }
                     let frame_number = frame_number.min(last_frame);
                     let frame_time = frame_number as f64 / fps as f64;
-                    let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
-                        if timeline.transitions.is_empty() {
-                            return None;
-                        }
-                        match timeline.get_frame_mapping(frame_time) {
-                            Some(TimelineFrameMapping::Transition {
-                                outgoing,
-                                kind,
-                                progress,
-                                ..
-                            }) => Some((outgoing, kind, progress)),
-                            _ => None,
-                        }
-                    });
-
-                    let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
+                    let Some(mapping) = project
+                        .timeline
+                        .as_ref()
+                        .and_then(|timeline| timeline.get_frame_mapping(frame_time))
+                    else {
                         warn!(
                             "Preview renderer: no segment found for frame {}",
                             frame_number
                         );
                         break;
                     };
+                    let transition_mapping = mapping.outgoing_transition();
+                    let source = mapping.primary_source();
+                    let (segment_time, segment) = (source.source_time, source.segment);
 
                     let Some(segment_medias) =
                         self.segment_medias.get(segment.recording_clip as usize)

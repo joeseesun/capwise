@@ -141,7 +141,7 @@ fn words_signature(segments: &[CaptionSegment]) -> u64 {
         segment.end.to_bits().hash(&mut hasher);
         segment.words.len().hash(&mut hasher);
         for word in &segment.words {
-            word_key(word).hash(&mut hasher);
+            (&word.text, word.start.to_bits(), word.end.to_bits()).hash(&mut hasher);
             word.hidden.hash(&mut hasher);
         }
     }
@@ -152,17 +152,31 @@ fn words_signature(segments: &[CaptionSegment]) -> u64 {
 pub struct RefinedCaptions {
     input_signature: u64,
     segments: Vec<CaptionSegment>,
+    source_ids: Vec<String>,
     /// Each input word's refined times, for captions edited while the
     /// refinement ran.
     retimed: HashMap<WordKey, (f32, f32)>,
 }
 
 impl RefinedCaptions {
+    #[cfg(test)]
     pub fn new(input: &[CaptionSegment], segments: Vec<CaptionSegment>) -> Self {
+        Self::from_grouped(
+            input,
+            segments
+                .into_iter()
+                .map(|segment| (segment.id.clone(), segment))
+                .collect(),
+        )
+    }
+
+    fn from_grouped(input: &[CaptionSegment], grouped: Vec<(String, CaptionSegment)>) -> Self {
+        let (source_ids, segments): (Vec<_>, Vec<_>) = grouped.into_iter().unzip();
         Self {
             input_signature: words_signature(input),
             retimed: match_retimes(input, &segments),
             segments,
+            source_ids,
         }
     }
 }
@@ -208,33 +222,61 @@ pub fn apply_refined_captions(
         return false;
     };
     if words_signature(&captions.segments) == refined.input_signature {
-        captions.segments = refined.segments.clone();
-    } else {
-        let mut changed = false;
-        for segment in &mut captions.segments {
-            let mut moved = false;
-            for word in &mut segment.words {
-                if let Some(&(start, end)) = refined.retimed.get(&word_key(word))
-                    && (word.start, word.end) != (start, end)
-                {
-                    (word.start, word.end) = (start, end);
-                    moved = true;
+        if captions
+            .segments
+            .iter()
+            .all(|caption| caption.manual_timing.is_none())
+        {
+            captions.segments = refined.segments.clone();
+        } else {
+            let mut refined_groups = refined.source_ids.iter().zip(&refined.segments).peekable();
+            let mut next = Vec::with_capacity(refined.segments.len());
+            for mut source in std::mem::take(&mut captions.segments) {
+                let group = std::iter::from_fn(|| {
+                    refined_groups
+                        .next_if(|(id, _)| **id == source.id)
+                        .map(|(_, segment)| segment)
+                });
+                if source.manual_timing.is_some() {
+                    group.for_each(drop);
+                    retime_existing_words(&mut source, refined);
+                    next.push(source);
+                } else {
+                    next.extend(group.cloned());
                 }
             }
-            if moved {
-                align::keep_order(&mut segment.words);
-                if let (Some(first), Some(last)) = (segment.words.first(), segment.words.last()) {
-                    (segment.start, segment.end) = (first.start, last.end);
-                }
-                changed = true;
-            }
+            captions.segments = next;
         }
-        if !changed {
-            return false;
-        }
+    } else if !captions
+        .segments
+        .iter_mut()
+        .fold(false, |changed, segment| {
+            retime_existing_words(segment, refined) || changed
+        })
+    {
+        return false;
     }
     cap_project::synchronize_captions(project, recording_durations);
     true
+}
+
+fn retime_existing_words(segment: &mut CaptionSegment, refined: &RefinedCaptions) -> bool {
+    let mut moved = false;
+    for word in &mut segment.words {
+        if let Some(&(start, end)) = refined.retimed.get(&word_key(word))
+            && (word.start, word.end) != (start, end)
+        {
+            (word.start, word.end) = (start, end);
+            moved = true;
+        }
+    }
+    if moved {
+        align::keep_order(&mut segment.words);
+        if let (Some(first), Some(last)) = (segment.words.first(), segment.words.last()) {
+            (segment.start, segment.end) = (first.start, last.end);
+        }
+    }
+    moved
 }
 
 /// Puts words back into the groups they came from; a recovered word joins
@@ -430,7 +472,7 @@ pub fn refine_blocking(
     )?;
     Ok(segments
         .filter(|segments| !segments.is_empty())
-        .map(|segments| RefinedCaptions::new(input, segments)))
+        .map(|segments| RefinedCaptions::from_grouped(input, segments)))
 }
 
 /// Re-chunks each input caption's refined words on its own. The first chunk
@@ -442,14 +484,14 @@ fn keep_caption_identities(
     groups: Vec<Vec<CaptionWord>>,
     language: &str,
     offsets: &[TranscriptionAudioOffset],
-) -> Vec<CaptionSegment> {
+) -> Vec<(String, CaptionSegment)> {
     let mut used: std::collections::HashSet<String> =
         input.iter().map(|segment| segment.id.clone()).collect();
     let mut groups = groups.into_iter();
     let mut refined = Vec::with_capacity(input.len());
     for segment in input {
         if segment.words.is_empty() {
-            refined.push(segment.clone());
+            refined.push((segment.id.clone(), segment.clone()));
             continue;
         }
         let Some(group) = groups.next() else {
@@ -470,7 +512,7 @@ fn keep_caption_identities(
                     used.insert(id.clone());
                     id
                 };
-                refined.push(restored);
+                refined.push((segment.id.clone(), restored));
             }
         }
     }
@@ -507,6 +549,7 @@ mod tests {
     #[test]
     fn refinement_preserves_hidden_words_changed_during_review() {
         let input = vec![CaptionSegment {
+            manual_timing: None,
             id: "a".into(),
             start: 0.0,
             end: 2.0,
@@ -561,6 +604,7 @@ mod tests {
     #[test]
     fn captions_keep_their_ids_when_recovered_words_split_them() {
         let caption = |id: &str, words: Vec<CaptionWord>| CaptionSegment {
+            manual_timing: None,
             id: id.to_string(),
             start: words[0].start,
             end: words[words.len() - 1].end,
@@ -585,7 +629,10 @@ mod tests {
             "en",
             &offsets,
         );
-        let ids: Vec<&str> = refined.iter().map(|segment| segment.id.as_str()).collect();
+        let ids: Vec<&str> = refined
+            .iter()
+            .map(|(_, segment)| segment.id.as_str())
+            .collect();
         assert!(ids.len() > 2, "{ids:?}");
         assert_eq!(ids[0], "segment-0");
         assert_eq!(ids[1], "segment-0-1");
@@ -595,6 +642,7 @@ mod tests {
     #[test]
     fn refining_split_captions_again_mints_no_duplicate_ids() {
         let caption = |id: &str, words: Vec<CaptionWord>| CaptionSegment {
+            manual_timing: None,
             id: id.to_string(),
             start: words[0].start,
             end: words[words.len() - 1].end,
@@ -619,11 +667,65 @@ mod tests {
             "en",
             &offsets,
         );
-        let mut ids: Vec<&str> = refined.iter().map(|segment| segment.id.as_str()).collect();
+        let mut ids: Vec<&str> = refined
+            .iter()
+            .map(|(_, segment)| segment.id.as_str())
+            .collect();
         let count = ids.len();
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), count, "{ids:?}");
+    }
+
+    #[test]
+    fn refinement_keeps_manual_timing_without_losing_recovered_words_in_other_captions() {
+        let caption = |id: &str, words: Vec<CaptionWord>| CaptionSegment {
+            id: id.into(),
+            start: words[0].start,
+            end: words.last().unwrap().end,
+            words,
+            ..Default::default()
+        };
+        let input = vec![
+            caption("manual", vec![word("original", 1.0, 1.5)]),
+            caption("auto", vec![word("other", 4.0, 4.5)]),
+        ];
+        let refined = RefinedCaptions::from_grouped(
+            &input,
+            vec![
+                (
+                    "manual".into(),
+                    caption("manual", vec![word("original", 1.1, 1.6)]),
+                ),
+                (
+                    "manual".into(),
+                    caption("manual-1", vec![word("extra", 2.0, 2.4)]),
+                ),
+                (
+                    "auto".into(),
+                    caption(
+                        "auto",
+                        vec![word("other", 4.1, 4.6), word("recovered", 4.7, 5.0)],
+                    ),
+                ),
+            ],
+        );
+        let mut project = ProjectConfiguration {
+            captions: Some(cap_project::CaptionsData {
+                segments: input,
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        project.captions.as_mut().unwrap().segments[0].manual_timing = Some([0.5, 3.0]);
+
+        assert!(apply_refined_captions(&mut project, &refined, &[]));
+        let captions = project.captions.unwrap();
+        assert_eq!(captions.segments.len(), 2);
+        assert_eq!(captions.segments[0].manual_timing, Some([0.5, 3.0]));
+        assert_eq!(captions.segments[0].words[0].start, 1.1);
+        assert_eq!(captions.segments[1].words[1].text, "recovered");
     }
 
     #[test]
@@ -650,6 +752,7 @@ mod tests {
     #[test]
     fn retimes_follow_input_words_past_recovered_ones() {
         let segment = |words: Vec<CaptionWord>| CaptionSegment {
+            manual_timing: None,
             id: "segment-0".to_string(),
             start: words.first().map_or(0.0, |word| word.start),
             end: words.last().map_or(0.0, |word| word.end),

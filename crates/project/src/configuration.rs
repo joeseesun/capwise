@@ -2353,6 +2353,27 @@ pub enum TimelineFrameMapping<'a> {
     },
 }
 
+impl<'a> TimelineFrameMapping<'a> {
+    pub fn primary_source(self) -> TimelineSource<'a> {
+        match self {
+            Self::Single { source, .. } | Self::Hold { source, .. } => source,
+            Self::Transition { incoming, .. } => incoming,
+        }
+    }
+
+    pub fn outgoing_transition(self) -> Option<(TimelineSource<'a>, ClipTransitionType, f64)> {
+        match self {
+            Self::Transition {
+                outgoing,
+                kind,
+                progress,
+                ..
+            } => Some((outgoing, kind, progress)),
+            Self::Single { .. } | Self::Hold { .. } => None,
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptionTrackSegment {
@@ -2362,6 +2383,8 @@ pub struct CaptionTrackSegment {
     pub text: String,
     #[serde(default)]
     pub words: Vec<CaptionWord>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_timing: bool,
     #[serde(default)]
     pub fade_duration_override: Option<f32>,
     #[serde(default)]
@@ -2374,6 +2397,18 @@ pub struct CaptionTrackSegment {
     pub background_color_override: Option<String>,
     #[serde(default)]
     pub font_size_override: Option<u32>,
+}
+
+impl CaptionTrackSegment {
+    pub fn effective_end(&self) -> f64 {
+        if self.manual_timing {
+            return self.end;
+        }
+        self.words.last().map_or(self.end, |word| {
+            self.end
+                .min(f64::from(word.start) + f64::from(crate::MAX_CAPTION_WORD_DURATION))
+        })
+    }
 }
 
 /// How far a hold's start may sit from the clips' end, after float rounding,
@@ -2683,15 +2718,8 @@ impl TimelineConfiguration {
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
-        match self.get_frame_mapping(frame_time)? {
-            TimelineFrameMapping::Single { source, .. }
-            | TimelineFrameMapping::Hold { source, .. } => {
-                Some((source.source_time, source.segment))
-            }
-            TimelineFrameMapping::Transition { incoming, .. } => {
-                Some((incoming.source_time, incoming.segment))
-            }
-        }
+        let source = self.get_frame_mapping(frame_time)?.primary_source();
+        Some((source.source_time, source.segment))
     }
 
     fn get_segment_time_without_transitions(
@@ -2849,6 +2877,8 @@ pub struct CaptionSegment {
     pub text: String,
     #[serde(default)]
     pub words: Vec<CaptionWord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_timing: Option<[f32; 2]>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]

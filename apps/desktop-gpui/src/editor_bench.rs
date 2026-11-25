@@ -145,6 +145,7 @@ fn seed_caption_fields(
     };
     timeline.caption_segments = (0..SEEDED_CAPTION_SEGMENTS)
         .map(|index| cap_project::CaptionTrackSegment {
+            manual_timing: false,
             id: format!("bench-{index}"),
             start: index as f64 * step,
             end: (index as f64 + 0.8) * step,

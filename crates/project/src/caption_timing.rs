@@ -65,6 +65,47 @@ fn clamp_caption_segment_words(segment: &CaptionSegment) -> CaptionSegment {
         end: segment.end.min(last_word_end),
         text: segment.text.clone(),
         words: clamped_words,
+        manual_timing: None,
+    }
+}
+
+fn retime_caption_words(caption: &CaptionSegment, start: f32, end: f32) -> Vec<CaptionWord> {
+    let retime = manual_caption_word_timing(caption, [start, end]);
+    caption
+        .words
+        .iter()
+        .cloned()
+        .map(|mut word| {
+            (word.start, word.end) = retime(&word);
+            word
+        })
+        .collect()
+}
+
+fn manual_caption_word_timing(
+    caption: &CaptionSegment,
+    [start, end]: [f32; 2],
+) -> impl Fn(&CaptionWord) -> (f32, f32) + use<> {
+    let first_start = caption
+        .words
+        .first()
+        .map_or(caption.start, |word| word.start);
+    let last_end = caption.words.last().map_or(caption.end, |word| word.end);
+    let old_duration = last_end - first_start;
+    let time = move |value: f32| {
+        let progress = ((value - first_start) / old_duration).clamp(0.0, 1.0);
+        start + progress * (end - start)
+    };
+    move |word| {
+        if old_duration.is_finite()
+            && old_duration > 0.0
+            && word.start.is_finite()
+            && word.end.is_finite()
+        {
+            (time(word.start), time(word.end))
+        } else {
+            (start, end)
+        }
     }
 }
 
@@ -246,6 +287,7 @@ struct MappedCaption {
     end: f64,
     text: String,
     words: Vec<CaptionWord>,
+    manual_timing: bool,
 }
 
 fn map_captions_to_edited_timeline(
@@ -256,13 +298,26 @@ fn map_captions_to_edited_timeline(
     if timeline.segments.is_empty() || recording_durations.is_empty() {
         return raw_segments
             .iter()
-            .map(clamp_caption_segment_words)
-            .map(|segment| MappedCaption {
-                id: segment.id,
-                start: f64::from(segment.start),
-                end: f64::from(segment.end),
-                text: segment.text,
-                words: segment.words,
+            .map(|caption| {
+                if let Some([start, end]) = caption.manual_timing.filter(valid_manual_timing) {
+                    return MappedCaption {
+                        id: caption.id.clone(),
+                        start: start.into(),
+                        end: end.into(),
+                        text: caption.text.clone(),
+                        words: retime_caption_words(caption, start, end),
+                        manual_timing: true,
+                    };
+                }
+                let segment = clamp_caption_segment_words(caption);
+                MappedCaption {
+                    id: segment.id,
+                    start: f64::from(segment.start),
+                    end: f64::from(segment.end),
+                    text: segment.text,
+                    words: segment.words,
+                    manual_timing: false,
+                }
             })
             .collect();
     }
@@ -296,24 +351,40 @@ fn map_captions_to_edited_timeline(
 
     for caption in raw_segments {
         let mut mapped_caption_segments: Vec<MappedCaption> = Vec::new();
-        let word_bounds = if caption.words.is_empty() {
+        let manual_range = caption.manual_timing.filter(valid_manual_timing);
+        let retime = manual_range.map(|range| manual_caption_word_timing(caption, range));
+        let words = &caption.words;
+        let word_range = |word: &CaptionWord| {
+            retime.as_ref().map_or_else(
+                || {
+                    (
+                        word.start,
+                        word.end.min(word.start + MAX_CAPTION_WORD_DURATION),
+                    )
+                },
+                |retime| retime(word),
+            )
+        };
+        let word_bounds = if words.is_empty() || manual_range.is_some() {
             None
         } else {
-            caption.words.iter().try_fold(
-                (f64::INFINITY, f64::NEG_INFINITY),
-                |(start, end), word| {
-                    let word_start = f64::from(word.start);
-                    let word_end = f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION));
+            words
+                .iter()
+                .try_fold((f64::INFINITY, f64::NEG_INFINITY), |(start, end), word| {
+                    let (word_start, word_end) = word_range(word);
+                    let word_start = f64::from(word_start);
+                    let word_end = f64::from(word_end);
                     if word_start.is_nan() || word_end.is_nan() {
                         None
                     } else {
                         Some((start.min(word_start), end.max(word_end)))
                     }
-                },
-            )
+                })
         };
 
-        let bounds = if caption.words.is_empty() {
+        let bounds = if let Some([start, end]) = manual_range {
+            Some((f64::from(start), f64::from(end)))
+        } else if words.is_empty() {
             Some((f64::from(caption.start), f64::from(caption.end)))
         } else {
             word_bounds
@@ -346,49 +417,49 @@ fn map_captions_to_edited_timeline(
         };
 
         for mapping in caption_mappings {
-            if !caption.words.is_empty() {
-                if let Some((word_start, word_end)) = word_bounds
-                    && (word_end <= mapping.source_start || word_start >= mapping.source_end)
-                {
+            let manual_bounds = manual_range.and_then(|[start, end]| {
+                map_time_range_within_mapping(start.into(), end.into(), mapping)
+                    .map(|(start, end)| hold_adjusted(start, end))
+            });
+            if manual_range.is_some() && manual_bounds.is_none() {
+                continue;
+            }
+            if let Some((start, end)) = word_bounds
+                && (end <= mapping.source_start || start >= mapping.source_end)
+            {
+                continue;
+            }
+            let mut mapped_words = Vec::new();
+            for word in words {
+                let (word_start, word_end) = word_range(word);
+                let Some((start, end)) =
+                    map_time_range_within_mapping(word_start.into(), word_end.into(), mapping)
+                else {
                     continue;
-                }
-
-                let mut mapped_words = Vec::new();
-                for word in &caption.words {
-                    let Some((start, end)) = map_time_range_within_mapping(
-                        f64::from(word.start),
-                        f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION)),
-                        mapping,
-                    ) else {
-                        continue;
-                    };
-                    let (start, end) = hold_adjusted(start, end);
-                    mapped_words.push(CaptionWord {
-                        text: word.text.clone(),
-                        start: start as f32,
-                        end: end as f32,
-                        hidden: word.hidden,
-                    });
-                }
-
-                if mapped_words.is_empty() {
-                    continue;
-                }
-
-                let start = mapped_words
-                    .first()
-                    .map_or(f64::from(caption.start), |word| f64::from(word.start));
-                let end = mapped_words
-                    .last()
-                    .map_or(f64::from(caption.end), |word| f64::from(word.end));
-                mapped_caption_segments.push(MappedCaption {
-                    id: caption.id.clone(),
-                    start,
-                    end,
-                    text: caption_text_from_words(&mapped_words),
-                    words: mapped_words,
+                };
+                let (start, end) = hold_adjusted(start, end);
+                mapped_words.push(CaptionWord {
+                    text: word.text.clone(),
+                    start: start as f32,
+                    end: end as f32,
+                    hidden: word.hidden,
                 });
-            } else {
+            }
+            let (start, end, text) = if let Some((start, end)) = manual_bounds {
+                if mapped_words.is_empty() {
+                    mapped_words.extend(words.iter().cloned().map(|mut word| {
+                        // The cue spans this clip, but none of its word highlights do.
+                        (word.start, word.end) = (start as f32, start as f32);
+                        word
+                    }));
+                }
+                let text = if words.is_empty() {
+                    caption.text.clone()
+                } else {
+                    caption_text_from_words(&mapped_words)
+                };
+                (start, end, text)
+            } else if words.is_empty() {
                 let Some((start, end)) = map_time_range_within_mapping(
                     f64::from(caption.start),
                     f64::from(caption.end),
@@ -397,14 +468,25 @@ fn map_captions_to_edited_timeline(
                     continue;
                 };
                 let (start, end) = hold_adjusted(start, end);
-                mapped_caption_segments.push(MappedCaption {
-                    id: caption.id.clone(),
-                    start,
-                    end,
-                    text: caption.text.clone(),
-                    words: Vec::new(),
-                });
-            }
+                (start, end, caption.text.clone())
+            } else {
+                let (Some(first), Some(last)) = (mapped_words.first(), mapped_words.last()) else {
+                    continue;
+                };
+                (
+                    f64::from(first.start),
+                    f64::from(last.end),
+                    caption_text_from_words(&mapped_words),
+                )
+            };
+            mapped_caption_segments.push(MappedCaption {
+                id: caption.id.clone(),
+                start,
+                end,
+                text,
+                words: mapped_words,
+                manual_timing: manual_range.is_some(),
+            });
         }
 
         let total = mapped_caption_segments.len();
@@ -415,6 +497,10 @@ fn map_captions_to_edited_timeline(
     }
 
     result
+}
+
+fn valid_manual_timing([start, end]: &[f32; 2]) -> bool {
+    start.is_finite() && end.is_finite() && start < end
 }
 
 pub fn derive_caption_track_segments(
@@ -454,6 +540,7 @@ fn mapped_track_segment(
         end: segment.end,
         text: segment.text,
         words: segment.words,
+        manual_timing: segment.manual_timing,
         fade_duration_override: overrides.and_then(|o| o.fade_duration_override),
         linger_duration_override: overrides.and_then(|o| o.linger_duration_override),
         position_override: overrides.and_then(|o| o.position_override.clone()),
@@ -467,6 +554,23 @@ pub fn update_caption_text_projection(
     project: &mut ProjectConfiguration,
     source_id: &str,
     recording_durations: &[f64],
+) -> Option<Vec<usize>> {
+    update_caption_projection(project, source_id, recording_durations, true)
+}
+
+pub fn update_caption_timing_projection(
+    project: &mut ProjectConfiguration,
+    source_id: &str,
+    recording_durations: &[f64],
+) -> Option<Vec<usize>> {
+    update_caption_projection(project, source_id, recording_durations, false)
+}
+
+fn update_caption_projection(
+    project: &mut ProjectConfiguration,
+    source_id: &str,
+    recording_durations: &[f64],
+    keep_timing: bool,
 ) -> Option<Vec<usize>> {
     let captions = project
         .captions
@@ -501,9 +605,27 @@ pub fn update_caption_text_projection(
     if mapped.len() != indices.len()
         || mapped.iter().zip(&indices).any(|(next, &index)| {
             let current = &timeline.caption_segments[index];
-            next.id != current.id
-                || next.start.to_bits() != current.start.to_bits()
-                || next.end.to_bits() != current.end.to_bits()
+            if next.id != current.id {
+                return true;
+            }
+            if keep_timing {
+                return next.start.to_bits() != current.start.to_bits()
+                    || next.end.to_bits() != current.end.to_bits();
+            }
+            if next.start.to_bits() == current.start.to_bits() {
+                return false;
+            }
+            let previous = index
+                .checked_sub(1)
+                .and_then(|i| timeline.caption_segments.get(i));
+            let following = timeline.caption_segments.get(index + 1);
+            previous.is_some_and(|segment| {
+                source_caption_id(&segment.id) != source_id
+                    && next.start.total_cmp(&segment.start).is_le()
+            }) || following.is_some_and(|segment| {
+                source_caption_id(&segment.id) != source_id
+                    && next.start.total_cmp(&segment.start).is_ge()
+            })
         })
     {
         return None;
@@ -570,6 +692,10 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
             .filter_map(|caption| {
                 let start = to_source(caption.start)?;
                 let end = to_source(caption.end)?;
+                let manual_timing = caption.manual_timing.and_then(|[start, end]| {
+                    let range = [to_source(start)?, to_source(end)?];
+                    valid_manual_timing(&range).then_some(range)
+                });
                 let words = caption
                     .words
                     .iter()
@@ -588,6 +714,7 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
                     end,
                     text: caption.text.clone(),
                     words,
+                    manual_timing,
                 })
             })
             .collect();
@@ -705,7 +832,7 @@ mod tests {
                 "segments":[{"start":0.0,"end":5.0,"timescale":1.0},{"start":6.0,"end":10.0,"timescale":1.0}],
                 "zoomSegments":[]
             })).unwrap()),
-            captions: Some(CaptionsData { source_timed, segments:vec![CaptionSegment { id:"spoken".into(),start,end,text:"hello".into(),words:vec![CaptionWord { text:"hello".into(),start,end, hidden: false }] }], ..Default::default() }),
+            captions: Some(CaptionsData { source_timed, segments:vec![CaptionSegment { manual_timing: None, id:"spoken".into(),start,end,text:"hello".into(),words:vec![CaptionWord { text:"hello".into(),start,end, hidden: false }] }], ..Default::default() }),
             ..Default::default()
         }
     }
@@ -773,6 +900,117 @@ mod tests {
         let mut reopened: ProjectConfiguration = serde_json::from_str(&saved).unwrap();
         synchronize_captions(&mut reopened, &[10.0]);
         assert_eq!(serde_json::to_string(&reopened).unwrap(), saved);
+    }
+
+    #[test]
+    fn legacy_caption_migration_converts_a_manual_range_to_source_time() {
+        let mut project = project(false, 0.5, 1.0);
+        let clips = &mut project.timeline.as_mut().unwrap().segments;
+        clips.truncate(1);
+        clips[0].start = 4.0;
+        clips[0].end = 12.0;
+        clips[0].timescale = 2.0;
+        project.captions.as_mut().unwrap().segments[0].manual_timing = Some([0.25, 3.5]);
+        synchronize_captions(&mut project, &[12.0]);
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!(source.manual_timing, Some([4.5, 11.0]));
+        let track = &project.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!((track.start, track.end), (0.25, 3.5));
+        assert!(track.manual_timing);
+    }
+
+    #[test]
+    fn timing_projection_updates_one_caption_and_falls_back_on_reorder() {
+        let mut project = project(true, 0.5, 1.5);
+        let captions = project.captions.as_mut().unwrap();
+        let mut later = captions.segments[0].clone();
+        later.id = "later".into();
+        later.manual_timing = Some([2.0, 3.0]);
+        captions.segments.push(later);
+        let durations = [10.0];
+        synchronize_captions(&mut project, &durations);
+
+        project.captions.as_mut().unwrap().segments[0].manual_timing = Some([0.75, 2.0]);
+        assert_eq!(
+            update_caption_timing_projection(&mut project, "spoken", &durations),
+            Some(vec![0])
+        );
+        let track = &project.timeline.as_ref().unwrap().caption_segments;
+        assert_eq!((track[0].start, track[0].end), (0.75, 2.0));
+        assert_eq!((track[1].start, track[1].end), (2.0, 3.0));
+
+        project.captions.as_mut().unwrap().segments[0].manual_timing = Some([3.0, 5.0]);
+        assert_eq!(
+            update_caption_timing_projection(&mut project, "spoken", &durations),
+            None
+        );
+        synchronize_captions(&mut project, &durations);
+        let track = &project.timeline.as_ref().unwrap().caption_segments;
+        assert_eq!(track[0].id, "later");
+        assert_eq!((track[1].start, track[1].end), (3.0, 5.0));
+    }
+
+    #[test]
+    fn timing_projection_defers_new_ties_to_source_order() {
+        let mut project = project(true, 2.0, 3.0);
+        let mut earlier = project.captions.as_ref().unwrap().segments[0].clone();
+        earlier.id = "earlier".into();
+        earlier.manual_timing = Some([1.0, 2.0]);
+        project.captions.as_mut().unwrap().segments.push(earlier);
+        let durations = [10.0];
+        synchronize_captions(&mut project, &durations);
+        project.captions.as_mut().unwrap().segments[0].manual_timing = Some([1.0, 3.0]);
+
+        assert_eq!(
+            update_caption_timing_projection(&mut project, "spoken", &durations),
+            None
+        );
+        synchronize_captions(&mut project, &durations);
+        assert_eq!(
+            project.timeline.as_ref().unwrap().caption_segments[0].id,
+            "spoken"
+        );
+    }
+
+    #[test]
+    fn a_cut_cannot_restore_hidden_words_in_a_manual_caption() {
+        let mut project = project(true, 0.0, 1.0);
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments[0].end = 1.0;
+        timeline.segments[1].start = 4.0;
+        timeline.segments[1].end = 6.0;
+        let captions = project.captions.as_mut().unwrap();
+        let caption = &mut captions.segments[0];
+        caption.manual_timing = Some([0.0, 10.0]);
+        caption.words[0].hidden = true;
+        caption.words.push(CaptionWord {
+            text: "world".into(),
+            start: 9.0,
+            end: 10.0,
+            hidden: true,
+        });
+        caption.text = "hello world".into();
+        synchronize_captions(&mut project, &[10.0]);
+        let track = &project.timeline.as_ref().unwrap().caption_segments;
+        let text = crate::export_subtitles(
+            track,
+            &project.captions.as_ref().unwrap().settings,
+            crate::SubtitleFormat::Srt,
+        );
+        assert!(text.is_empty(), "{text}");
+
+        project.captions.as_mut().unwrap().segments[0].words[0].hidden = false;
+        synchronize_captions(&mut project, &[10.0]);
+        let text = crate::export_subtitles(
+            &project.timeline.as_ref().unwrap().caption_segments,
+            &project.captions.as_ref().unwrap().settings,
+            crate::SubtitleFormat::Srt,
+        );
+        assert!(
+            text.contains("00:00:01,000 --> 00:00:03,000\nhello\n"),
+            "{text}"
+        );
+        assert!(!text.contains("world"), "{text}");
     }
 
     #[test]
@@ -894,6 +1132,7 @@ mod tests {
     fn unsorted_words_outside_caption_bounds_keep_both_clip_projections() {
         let timeline = project(true, 0.0, 0.5).timeline.unwrap();
         let captions = [CaptionSegment {
+            manual_timing: None,
             id: "unsorted".into(),
             start: 0.0,
             end: 0.5,
@@ -952,6 +1191,7 @@ mod tests {
     fn nan_word_timestamp_keeps_the_existing_mapping_path() {
         let timeline = project(true, 0.0, 0.5).timeline.unwrap();
         let captions = [CaptionSegment {
+            manual_timing: None,
             id: "nan".into(),
             start: 0.0,
             end: 0.5,

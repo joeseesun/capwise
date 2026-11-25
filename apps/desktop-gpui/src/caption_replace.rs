@@ -176,6 +176,7 @@ mod tests {
 
     fn line(text: &str, words: &[&str]) -> CaptionSegment {
         CaptionSegment {
+            manual_timing: None,
             id: "segment-0".into(),
             start: 0.0,
             end: words.len() as f32,

@@ -9,6 +9,7 @@ declare class CapScreenRecorderNativeModule extends NativeModule {
 	getAvailability(): Promise<CapScreenRecorderAvailability>;
 	prepareRecording(options: PrepareScreenRecordingOptions): Promise<void>;
 	getRecordingUpdates(recordingId: string): Promise<CapScreenRecorderUpdates>;
+	getRecordingStatus?(recordingId: string): Promise<CapScreenRecorderUpdates>;
 	cancelRecording(recordingId: string): Promise<void>;
 }
 
@@ -44,6 +45,14 @@ export const prepareScreenRecording = (
 
 export const getScreenRecordingUpdates = (recordingId: string) =>
 	getNativeModule().getRecordingUpdates(recordingId);
+
+export const getScreenRecordingStatus = (recordingId: string) => {
+	const nativeModule = getNativeModule();
+	return (
+		nativeModule.getRecordingStatus?.(recordingId) ??
+		nativeModule.getRecordingUpdates(recordingId)
+	);
+};
 
 export const cancelScreenRecording = (recordingId: string) =>
 	getNativeModule().cancelRecording(recordingId);

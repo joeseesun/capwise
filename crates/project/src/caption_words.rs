@@ -293,7 +293,9 @@ pub fn caption_display_segment(
     }
     let mut start = segment.start;
     let mut end = segment.end;
-    if let (Some(first), Some(last)) = (words.first(), words.last()) {
+    if !segment.manual_timing
+        && let (Some(first), Some(last)) = (words.first(), words.last())
+    {
         if segment.words.first().is_some_and(leaves) {
             start = start.max(f64::from(first.start));
         }
@@ -537,6 +539,7 @@ mod tests {
 
     fn track(text: &str, words: &[(&str, f32, f32)]) -> CaptionTrackSegment {
         CaptionTrackSegment {
+            manual_timing: false,
             id: "caption".into(),
             start: f64::from(words.first().map_or(0.0, |w| w.1)),
             end: f64::from(words.last().map_or(1.0, |w| w.2)),

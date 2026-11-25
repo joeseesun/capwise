@@ -24,11 +24,12 @@ impl CaptionSettings {
     /// and letter case do not change what a line says, so an edit to only
     /// those keeps its translation.
     pub fn translation_for(&self, id: &str, source_text: &str) -> Option<&CaptionTranslation> {
-        let source_text = translation_key(source_text);
+        let mut source_key = None;
         [id, source_caption_id(id)].into_iter().find_map(|key| {
             self.translations.get(key).filter(|translation| {
                 !translation.text.trim().is_empty()
-                    && translation_key(&translation.source_text) == source_text
+                    && &translation_key(&translation.source_text)
+                        == source_key.get_or_insert_with(|| translation_key(source_text))
             })
         })
     }
@@ -61,8 +62,15 @@ pub fn caption_presentation_text(
     else {
         return String::new();
     };
-    let original = caption_display_text(&display.text);
-    let translation = settings.translation_for(&segment.id, &original);
+    presentation_text(&display, settings)
+}
+
+fn presentation_text(segment: &CaptionTrackSegment, settings: &CaptionSettings) -> String {
+    let original = caption_display_text(&segment.text);
+    let translation = match settings.display_mode {
+        CaptionDisplayMode::Original => None,
+        _ => settings.translation_for(&segment.id, &original),
+    };
     let original = if settings.uppercase {
         original.to_uppercase()
     } else {
@@ -122,14 +130,12 @@ pub fn export_subtitles(
         else {
             continue;
         };
-        let end = display.words.last().map_or(display.end, |word| {
-            display
-                .end
-                .min(f64::from(word.start) + crate::MAX_CAPTION_WORD_DURATION as f64)
-        });
-        let text = caption_presentation_text(&display, settings);
-        if !display.start.is_finite() || !end.is_finite() || end <= display.start || text.is_empty()
-        {
+        let end = display.effective_end();
+        if !display.start.is_finite() || !end.is_finite() || end <= display.start {
+            continue;
+        }
+        let text = presentation_text(&display, settings);
+        if text.is_empty() {
             continue;
         }
         output.push_str(&format!(
