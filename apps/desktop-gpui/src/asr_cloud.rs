@@ -230,7 +230,7 @@ static LLAMA_QWEN: AsrService = AsrService {
     needs_key: false,
     context: ContextMode::System,
     chunk_target: 15.0,
-    chunk_max: 30.0,
+    chunk_max: 20.0,
 };
 
 pub fn service(id: &str) -> Option<&'static AsrService> {
@@ -259,6 +259,8 @@ const FRAMES_PER_SECOND: usize = 50;
 const CHUNK_MIN: f64 = 4.0;
 const SILENCE_SECONDS: f64 = 0.15;
 const CONCURRENCY: usize = 3;
+const QWEN_MAX_TOKENS: u32 = 512;
+const QWEN_RETRY_MIN_SPLIT_SECONDS: f64 = 8.0;
 const RETRIES: u32 = 3;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 const DOUBAO_CONTEXT_BUDGET: usize = 700;
@@ -430,6 +432,47 @@ fn asr_text(reply: &str) -> &str {
         .trim_end_matches("</asr_text>")
 }
 
+pub(crate) fn has_repeated_passage(text: &str) -> bool {
+    const MIN_PERIOD: usize = 8;
+    const MAX_PERIOD: usize = 128;
+    const COPIES: usize = 5;
+
+    let characters: Vec<char> = text
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    for start in 0..characters.len().saturating_sub(MIN_PERIOD * COPIES - 1) {
+        let remainder = &characters[start..];
+        for period in MIN_PERIOD..=(remainder.len() / COPIES).min(MAX_PERIOD) {
+            let (first, rest) = remainder.split_at(period);
+            if rest
+                .chunks_exact(period)
+                .take(COPIES - 1)
+                .all(|copy| copy == first)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn qwen_utterances(choice: &Value, duration_ms: f64) -> Result<Vec<Utterance>, Failure> {
+    let text = choice
+        .pointer("/message/content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Failure::Fatal(tr::asr::unreadable((LLAMA_QWEN.name)())))?;
+    let text = tidy(asr_text(text));
+    if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
+        return Err(Failure::UnreliableTranscript("token limit"));
+    }
+    if has_repeated_passage(&text) {
+        return Err(Failure::UnreliableTranscript("repeated passage"));
+    }
+    Ok(spread_sentences(&text, duration_ms))
+}
+
 /// Sentences, each a stretch of the piece in proportion to its length.
 fn spread_sentences(text: &str, duration_ms: f64) -> Vec<Utterance> {
     let mut sentences = Vec::new();
@@ -469,6 +512,7 @@ fn spread_sentences(text: &str, duration_ms: f64) -> Vec<Utterance> {
 enum Failure {
     Fatal(String),
     Retry(String),
+    UnreliableTranscript(&'static str),
 }
 
 fn jitter() -> f64 {
@@ -621,12 +665,15 @@ async fn send_once(
                 messages.push(json!({ "role": "system", "content": context }));
             }
             messages.push(json!({ "role": "user", "content": [{ "type": "input_audio", "input_audio": { "data": audio, "format": "wav" } }] }));
-            client.post(format!("{base}/chat/completions")).json(&json!({
-                "model": endpoint.model,
-                "messages": messages,
-                "temperature": 0,
-                "stream": false,
-            }))
+            client
+                .post(format!("{base}/chat/completions"))
+                .json(&json!({
+                    "model": endpoint.model,
+                    "messages": messages,
+                    "temperature": 0,
+                    "max_tokens": QWEN_MAX_TOKENS,
+                    "stream": false,
+                }))
         }
         Protocol::ChatAudio => {
             let audio = base64::engine::general_purpose::STANDARD.encode(wav);
@@ -691,7 +738,11 @@ async fn send_once(
                 None => Ok(spread_sentences(&tidy(&parsed.text), duration_ms)),
             }
         }
-        Protocol::ChatAudio | Protocol::LlamaAsr => {
+        Protocol::LlamaAsr => {
+            let value: Value = response.json().await.map_err(|_| unreadable())?;
+            qwen_utterances(&value["choices"][0], duration_ms)
+        }
+        Protocol::ChatAudio => {
             let value: Value = response.json().await.map_err(|_| unreadable())?;
             let text = value
                 .pointer("/choices/0/message/content")
@@ -702,18 +753,20 @@ async fn send_once(
     }
 }
 
-async fn recognize(
+async fn request_with_retry(
     client: &reqwest::Client,
     request: &Request<'_>,
     samples: &[f32],
-) -> Result<Vec<Utterance>, String> {
+) -> Result<Vec<Utterance>, Failure> {
     let wav = wav_bytes(samples);
     let duration_ms = samples.len() as f64 / SAMPLE_RATE as f64 * 1000.0;
     let mut last = String::new();
     for attempt in 0..=RETRIES {
         match send_once(client, request, &wav, duration_ms).await {
             Ok(utterances) => return Ok(utterances),
-            Err(Failure::Fatal(message)) => return Err(message),
+            Err(error @ (Failure::Fatal(_) | Failure::UnreliableTranscript(_))) => {
+                return Err(error);
+            }
             Err(Failure::Retry(message)) => {
                 last = message;
                 if attempt < RETRIES {
@@ -722,7 +775,73 @@ async fn recognize(
             }
         }
     }
-    Err(tr::asr::connection_failed((request.service.name)(), &last))
+    Err(Failure::Fatal(tr::asr::connection_failed(
+        (request.service.name)(),
+        &last,
+    )))
+}
+
+fn qwen_retry_pieces(samples: &[f32]) -> Vec<&[f32]> {
+    let total = samples.len() as f64 / SAMPLE_RATE as f64;
+    if total < QWEN_RETRY_MIN_SPLIT_SECONDS {
+        return vec![samples];
+    }
+
+    let middle = total / 2.0;
+    let cut = silence_midpoints(samples)
+        .into_iter()
+        .filter(|time| (total * 0.4..=total * 0.6).contains(time))
+        .min_by(|left, right| (left - middle).abs().total_cmp(&(right - middle).abs()))
+        .unwrap_or(middle);
+    let (left, right) = samples.split_at((cut * SAMPLE_RATE as f64).round() as usize);
+    vec![left, right]
+}
+
+async fn recognize(
+    client: &reqwest::Client,
+    request: &Request<'_>,
+    samples: &[f32],
+) -> Result<Vec<Utterance>, String> {
+    let reason = match request_with_retry(client, request, samples).await {
+        Ok(utterances) => return Ok(utterances),
+        Err(Failure::Fatal(message) | Failure::Retry(message)) => return Err(message),
+        Err(Failure::UnreliableTranscript(reason)) => reason,
+    };
+
+    let pieces = qwen_retry_pieces(samples);
+    tracing::warn!(
+        reason,
+        pieces = pieces.len(),
+        "Retrying local Qwen transcription without hints"
+    );
+    let request = Request {
+        context: "",
+        ..*request
+    };
+    let mut utterances = Vec::new();
+    let mut offset_samples = 0;
+    for piece in pieces {
+        match request_with_retry(client, &request, piece).await {
+            Ok(mut found) => {
+                let offset_ms = offset_samples as f64 * 1_000.0 / SAMPLE_RATE as f64;
+                for utterance in &mut found {
+                    utterance.start_time += offset_ms;
+                    utterance.end_time += offset_ms;
+                }
+                utterances.extend(found);
+            }
+            Err(Failure::Fatal(message) | Failure::Retry(message)) => return Err(message),
+            Err(Failure::UnreliableTranscript(reason)) => {
+                tracing::warn!(
+                    reason,
+                    "Local Qwen transcription retry returned unusable text"
+                );
+                return Err(tr::asr::unreadable((request.service.name)()));
+            }
+        }
+        offset_samples += piece.len();
+    }
+    Ok(utterances)
 }
 
 // ---- words back onto the timeline -------------------------------------------
@@ -957,7 +1076,7 @@ pub fn transcribe(
     if service.needs_key && key.is_empty() {
         return Err(tr::asr::no_key((service.name)()));
     }
-    run(service, &service.endpoint(), &key, samples, hints)
+    run(service, &service.endpoint(), &key, samples, hints, false)
 }
 
 /// Recognise with Qwen3-ASR behind a local `llama-server` at `base_url`.
@@ -971,7 +1090,70 @@ pub fn transcribe_llama(
         base_url: base_url.to_string(),
         model: model.to_string(),
     };
-    run(&LLAMA_QWEN, &endpoint, "", samples, hints)
+    run(&LLAMA_QWEN, &endpoint, "", samples, hints, false)
+}
+
+pub(crate) struct VerifiedRecognition {
+    pub segments: Vec<CaptionSegment>,
+    pub reference: Option<Vec<CaptionSegment>>,
+}
+
+pub(crate) fn verify_cloud(
+    id: &str,
+    expected_model: &str,
+    samples: &[f32],
+    hints: &[String],
+) -> Result<VerifiedRecognition, String> {
+    let service = service(id).ok_or_else(|| tr::editor::regenerate::model_changed().to_string())?;
+    let endpoint = service.endpoint();
+    if endpoint.model != expected_model || !service.ready() {
+        return Err(tr::editor::regenerate::model_changed().into());
+    }
+    let key = ai_store::key(Kind::Asr, id).unwrap_or_default();
+    verify_recognition(service, &endpoint, &key, samples, hints)
+}
+
+pub(crate) fn verify_llama(
+    base_url: &str,
+    model: &str,
+    samples: &[f32],
+) -> Result<VerifiedRecognition, String> {
+    let endpoint = Endpoint {
+        base_url: base_url.into(),
+        model: model.into(),
+    };
+    verify_recognition(&LLAMA_QWEN, &endpoint, "", samples, &[])
+}
+
+fn verify_recognition(
+    service: &'static AsrService,
+    endpoint: &Endpoint,
+    key: &str,
+    samples: &[f32],
+    hints: &[String],
+) -> Result<VerifiedRecognition, String> {
+    let segments = run(service, endpoint, key, samples, hints, false)?;
+    let reference = if service.protocol == Protocol::Doubao {
+        None
+    } else {
+        Some(run(service, endpoint, key, samples, &[], true)?)
+    };
+    Ok(VerifiedRecognition {
+        segments,
+        reference,
+    })
+}
+
+fn speech_bounds(samples: &[f32]) -> Option<std::ops::Range<usize>> {
+    let frame_size = SAMPLE_RATE / FRAMES_PER_SECOND;
+    let power: Vec<f32> = samples
+        .chunks(frame_size)
+        .map(|frame| frame.iter().map(|sample| sample * sample).sum::<f32>() / frame.len() as f32)
+        .collect();
+    let threshold = (power.iter().copied().fold(0.0, f32::max) * 0.004).max(0.000_009);
+    let start = power.iter().position(|level| *level >= threshold)?;
+    let end = power.iter().rposition(|level| *level >= threshold)? + 1;
+    Some(start * frame_size..(end * frame_size).min(samples.len()))
 }
 
 fn run(
@@ -980,6 +1162,7 @@ fn run(
     key: &str,
     samples: &[f32],
     hints: &[String],
+    reference: bool,
 ) -> Result<Vec<CaptionSegment>, String> {
     let context = context_for(service, hints);
     let request = Request {
@@ -991,7 +1174,9 @@ fn run(
     let total = samples.len() as f64 / SAMPLE_RATE as f64;
     let streaming =
         service.protocol == Protocol::Doubao && doubao_stream::selected(&endpoint.model);
-    let (target, maximum) = if streaming {
+    let (target, maximum) = if reference {
+        (4.0, 5.5)
+    } else if streaming {
         (25.0, 40.0)
     } else {
         (service.chunk_target, service.chunk_max)
@@ -1022,7 +1207,18 @@ fn run(
                 let to = ((end * SAMPLE_RATE as f64) as usize).min(samples.len());
                 let piece = &samples[from.min(to)..to];
                 let (client, request) = (&client, &request);
-                async move { recognize(client, request, piece).await.map(|found| (start, found)) }
+                async move {
+                    let (piece, offset) = if reference {
+                        let Some(bounds) = speech_bounds(piece) else {
+                            return Ok((start, Vec::new()));
+                        };
+                        let offset = bounds.start as f64 / SAMPLE_RATE as f64;
+                        (&piece[bounds], offset)
+                    } else {
+                        (piece, 0.0)
+                    };
+                    recognize(client, request, piece).await.map(|found| (start + offset, found))
+                }
             }))
             .buffered(concurrency)
             .collect()
@@ -1140,7 +1336,49 @@ mod tests {
         assert_eq!(asr_text("language Chinese<asr_text>大家好。"), "大家好。");
         assert_eq!(asr_text("<asr_text>hi</asr_text>"), "hi");
         assert_eq!(asr_text("plain"), "plain");
-        assert_eq!(system_context(&["灵录".into(), "通义千问".into()]), "灵录、通义千问");
+        assert_eq!(
+            system_context(&["灵录".into(), "通义千问".into()]),
+            "灵录、通义千问"
+        );
+    }
+
+    #[test]
+    fn qwen_rejects_a_repeated_passage_before_assigning_timestamps() {
+        let text = format!(
+            "language Chinese<asr_text>前面有正常内容。{}",
+            "这是第一组数据。接下来我们看标题。最后展示结果。".repeat(12)
+        );
+        let choice = json!({ "finish_reason": "stop", "message": { "content": text } });
+        assert!(matches!(
+            qwen_utterances(&choice, 16_000.0),
+            Err(Failure::UnreliableTranscript("repeated passage"))
+        ));
+    }
+
+    #[test]
+    fn qwen_rejects_a_token_limit_but_keeps_short_spoken_repetitions() {
+        let content = "language Chinese<asr_text>对对对对对，真的真的。我来展示最后一步。";
+        let mut choice = json!({ "finish_reason": "length", "message": { "content": content } });
+        assert!(matches!(
+            qwen_utterances(&choice, 4_000.0),
+            Err(Failure::UnreliableTranscript("token limit"))
+        ));
+
+        choice["finish_reason"] = json!("stop");
+        let utterances = qwen_utterances(&choice, 4_000.0).ok().unwrap();
+        assert_eq!(utterances[0].text, "对对对对对，真的真的。");
+        assert_eq!(utterances[1].text, "我来展示最后一步。");
+    }
+
+    #[test]
+    fn qwen_retry_splits_at_a_nearby_pause_without_losing_samples() {
+        let mut samples = vec![0.3; 5 * SAMPLE_RATE];
+        samples.extend(vec![0.0; SAMPLE_RATE]);
+        samples.extend(vec![0.3; 4 * SAMPLE_RATE]);
+        let pieces = qwen_retry_pieces(&samples);
+        assert_eq!(pieces[0].len(), SAMPLE_RATE * 11 / 2);
+        assert_eq!(pieces.concat(), samples);
+        assert_eq!(qwen_retry_pieces(&samples[..SAMPLE_RATE]).len(), 1);
     }
 
     #[test]

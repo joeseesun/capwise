@@ -26,6 +26,7 @@ mod camera_loading;
 mod camera_window;
 mod caption_breaks;
 mod caption_canvas;
+mod caption_regeneration;
 mod caption_replace;
 mod caption_review;
 mod caption_translation;

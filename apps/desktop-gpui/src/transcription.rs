@@ -56,6 +56,7 @@ use crate::{editor_timeline::clip_timeline_offsets, store};
 
 mod align;
 mod refine;
+pub(crate) mod regenerate;
 mod verbatim;
 
 pub(crate) use refine::refinement_request_checked;

@@ -3638,22 +3638,6 @@ impl EditorWindow {
                 )
                 .into_any_element()
         });
-        let regenerate = (has_captions && model_downloaded && has_audio).then(|| {
-            ui::EditorButton::plain(&theme, "caption-generate")
-                .tinted(&theme)
-                .height(px(32.))
-                .left_icon("icons/refresh-cw.svg")
-                .label(if generating {
-                    tr::editor::tabs::captions::generating()
-                } else {
-                    tr::editor::workbench::recognize_again()
-                })
-                .disabled(generating || any_deleting)
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.generate_transcript(true, window, cx)),
-                )
-                .into_any_element()
-        });
         let resplit = wants_resplit.then(|| {
             ui::EditorButton::plain(&theme, "caption-resplit")
                 .tinted(&theme)
@@ -3810,13 +3794,13 @@ impl EditorWindow {
                         .children(quick_actions)
                         .child(self.render_caption_review(cx)),
                 )
+                .child(self.render_caption_regeneration(has_audio, generating, cx))
                 .child(self.render_caption_content_list(cx))
                 .child(self.more_settings("captions", cx, move |_, cx| {
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(12.))
-                        .children(regenerate)
                         .children(resplit)
                         .child(
                             ui::EditorButton::plain(&theme, "caption-text-video-editor")
@@ -4798,7 +4782,7 @@ impl EditorWindow {
     /// Repaints the tab while a download streams -- the stand-in for Tauri's
     /// `DownloadProgress` events plus the 1s status poll
     /// (`CaptionsTab.tsx:550-555`); the hub already carries the numbers.
-    fn spawn_caption_download_poll(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn spawn_caption_download_poll(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -5264,6 +5248,10 @@ impl EditorWindow {
         {
             captions.settings.set_source_font(font.to_string());
         }
+        next.caption_recognition = Some(transcription::regenerate::recognition(
+            &refinement.model,
+            &refinement.language,
+        ));
         self.queue_caption_processing(&next, (!append).then_some(refinement), cx)?;
         self.edit_project_global("caption-generate", window, cx, move |project| {
             *project = next;

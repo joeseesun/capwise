@@ -3977,6 +3977,22 @@ previous_sentence = "上一句"
 next_sentence = "下一句"
 use_steady = "切换到匀速滚动"
 
+[editor.regenerate]
+open = "重新生成字幕"
+previous = "用上次模型"
+change_model = "换模型"
+unknown = "上次模型不可用或未记录"
+suspect = "仅异常段"
+full = "整段视频"
+draft = "生成预览"
+validating = "正在与原音核对字幕…"
+verified = "已与原音核对 {count} 条字幕"
+listen = "试听这段原音"
+apply = "替换字幕"
+unverified = "这些字幕未通过原音核对。可换一个模型或调整重做范围。"
+model_changed = "上次使用的模型配置已变更，请重新选择。"
+cloud = "音频将发送给此服务。核对时可能会多次请求并产生费用。"
+
 [editor.workbench]
 captions_hidden = "字幕已隐藏，预览和导出都不显示。"
 content = "内容"
