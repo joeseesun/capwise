@@ -422,15 +422,18 @@ def main():
             inputs.extend(input_files(args.folder, tags))
         for identity in dict.fromkeys(args.from_qiaomu):
             inputs.append(qiaomu_metadata(identity, scratch, tags))
+        batch_sources = set()
         for path, meta in inputs:
             if not 0 < path.stat().st_size <= 512 * 1024 * 1024:
                 raise ValueError(f"原始音频为空或超过 512 MB：{path.name}")
             item = encode(path.resolve(), meta, media, scratch)
-            if item["id"] not in tracks and item["sourceHash"] in media_sources:
+            source_hash = item["sourceHash"]
+            if source_hash in batch_sources or (item["id"] not in tracks and source_hash in media_sources):
                 print(f"跳过重复音频：{item['title']}")
                 continue
             tracks[item["id"]] = item
-            media_sources.add(item["sourceHash"])
+            media_sources.add(source_hash)
+            batch_sources.add(source_hash)
             print(f"{item['id']}  {item['title']}  {format_time(item['duration'])}")
         for identity in args.remove:
             if tracks.pop(identity, None) is None:
