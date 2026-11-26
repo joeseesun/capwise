@@ -78,11 +78,28 @@ impl EditorWindow {
             .collect()
     }
 
+    fn caption_regeneration_unconfigured_services(
+        ready: &[(CaptionRecognition, String)],
+    ) -> impl Iterator<Item = &'static crate::asr_cloud::AsrService> + '_ {
+        crate::asr_cloud::SERVICES
+            .iter()
+            .filter(|service| !ready.iter().any(|(source, _)| source.engine == service.id))
+    }
+
     pub(crate) fn caption_regeneration_model_items(&self) -> Vec<ui::MenuItem> {
         let current = self.sidebar.caption_regeneration.chosen.as_ref();
-        self.caption_regeneration_models()
-            .into_iter()
-            .map(|(source, label)| ui::MenuItem::new(label, current == Some(&source)))
+        let ready = self.caption_regeneration_models();
+        ready
+            .iter()
+            .map(|(source, label)| ui::MenuItem::new(label.clone(), current == Some(source)))
+            .chain(
+                Self::caption_regeneration_unconfigured_services(&ready).map(|service| {
+                    ui::MenuItem::new(
+                        tr::editor::regenerate::configure_model((service.name)()),
+                        false,
+                    )
+                }),
+            )
             .collect()
     }
 
@@ -91,9 +108,16 @@ impl EditorWindow {
         index: usize,
         cx: &mut Context<Self>,
     ) {
-        if let Some((source, _)) = self.caption_regeneration_models().into_iter().nth(index) {
+        let mut ready = self.caption_regeneration_models();
+        if index < ready.len() {
+            let (source, _) = ready.swap_remove(index);
             self.sidebar.caption_regeneration.chosen = Some(source);
             self.sidebar.caption_regeneration.error = None;
+        } else if let Some(service) =
+            Self::caption_regeneration_unconfigured_services(&ready).nth(index - ready.len())
+        {
+            let id = service.id;
+            cx.defer(move |cx| crate::app_windows::open_asr_provider_settings(id, cx));
         }
         self.invalidate_sidebar(cx);
     }

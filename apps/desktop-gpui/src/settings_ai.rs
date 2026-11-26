@@ -536,6 +536,22 @@ impl SettingsWindow {
 
     // ---- editing a service -------------------------------------------------
 
+    pub(crate) fn edit_asr_provider(
+        &mut self,
+        id: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ai_edit(
+            Target {
+                kind: ModelKind::Asr,
+                id,
+            },
+            window,
+            cx,
+        );
+    }
+
     fn ai_edit(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
         let (endpoint, ..) = defaults(target);
         let state = &mut self.pages.ai;

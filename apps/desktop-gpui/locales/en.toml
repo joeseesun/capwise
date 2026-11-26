@@ -3982,6 +3982,7 @@ use_steady = "Switch to steady scroll"
 [editor.regenerate]
 open = "Regenerate captions"
 model_label = "Model"
+configure_model = "{model} · Set up"
 previous_model = "{model} (last used)"
 using_previous = "Last used model"
 scope_label = "Range"

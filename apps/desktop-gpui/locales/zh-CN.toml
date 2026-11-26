@@ -3980,6 +3980,7 @@ use_steady = "切换到匀速滚动"
 [editor.regenerate]
 open = "重新生成字幕"
 model_label = "识别模型"
+configure_model = "{model} · 去配置"
 previous_model = "{model}（上次使用）"
 using_previous = "沿用上次模型"
 scope_label = "重做范围"
