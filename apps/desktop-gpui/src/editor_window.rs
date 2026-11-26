@@ -4009,6 +4009,7 @@ impl EditorWindow {
     /// effect, by prev/next, and by the clips sidebar's import path
     /// (`ClipsSidebar.tsx:508-511`).
     pub(crate) fn stop_playback(&mut self, cx: &mut Context<Self>) {
+        self.clear_caption_regeneration_audition(cx);
         self.play_until = None;
         self.playback_follow.reset();
         if self.preparing_transport_active() {
@@ -14589,6 +14590,7 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
         | SidebarMenu::CameraCornerStyle
         | SidebarMenu::AudioStereo
         | SidebarMenu::CaptionModel
+        | SidebarMenu::CaptionRegenerationModel
         | SidebarMenu::CaptionLanguage
         | SidebarMenu::TranslationLanguage
         | SidebarMenu::CaptionFont

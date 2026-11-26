@@ -1307,6 +1307,7 @@ pub enum SidebarMenu {
     CameraCornerStyle,
     AudioStereo,
     CaptionModel,
+    CaptionRegenerationModel,
     CaptionLanguage,
     TranslationLanguage,
     CaptionFont,
@@ -1345,6 +1346,7 @@ impl EditorWindow {
         let keyboard = keyboard_settings(project);
         match kind {
             SidebarMenu::TranslationLanguage => self.translation_language_items(),
+            SidebarMenu::CaptionRegenerationModel => self.caption_regeneration_model_items(),
             SidebarMenu::BackgroundCornerStyle => CORNER_STYLES
                 .iter()
                 .map(|(style, label)| {
@@ -1532,6 +1534,9 @@ impl EditorWindow {
         self.sidebar.menu = None;
         match kind {
             SidebarMenu::TranslationLanguage => self.choose_translation_language(index, window, cx),
+            SidebarMenu::CaptionRegenerationModel => {
+                self.choose_caption_regeneration_model(index, cx)
+            }
             SidebarMenu::BackgroundCornerStyle => {
                 let Some((style, _)) = CORNER_STYLES.get(index) else {
                     return;
@@ -3786,6 +3791,7 @@ impl EditorWindow {
                 .flex()
                 .flex_col()
                 .gap(px(14.))
+                .child(self.render_caption_regeneration(has_audio, generating, cx))
                 .child(
                     div()
                         .flex()
@@ -3794,7 +3800,6 @@ impl EditorWindow {
                         .children(quick_actions)
                         .child(self.render_caption_review(cx)),
                 )
-                .child(self.render_caption_regeneration(has_audio, generating, cx))
                 .child(self.render_caption_content_list(cx))
                 .child(self.more_settings("captions", cx, move |_, cx| {
                     div()

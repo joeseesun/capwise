@@ -1254,6 +1254,17 @@ pub(crate) fn open_ai_settings(tab: crate::settings_ai::AiTab, cx: &mut App) {
     }
 }
 
+pub(crate) fn open_asr_provider_settings(id: &'static str, cx: &mut App) {
+    open_ai_settings(crate::settings_ai::AiTab::Recognition, cx);
+    if let Some(handle) = cx.global::<AppWindows>().settings {
+        handle
+            .update(cx, |view, window, cx| {
+                view.edit_asr_provider(id, window, cx)
+            })
+            .ok();
+    }
+}
+
 pub fn open_settings(page: Page, cx: &mut App) {
     #[cfg(target_os = "linux")]
     if defer_window_until_capture_safe(cx) {
