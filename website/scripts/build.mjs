@@ -156,7 +156,7 @@ if (links.length) {
 
 for (const match of html.matchAll(/(?:src|href)="(\/[^"?#]*)/g)) {
 	const path = match[1];
-	if (path === "/") continue;
+	if (path === "/" || path === "/music/") continue;
 	await readFile(`${root}dist${path}`);
 }
 console.log(`Built Capwise website with asset version ${version}.`);

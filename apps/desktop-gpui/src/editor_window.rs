@@ -4049,6 +4049,7 @@ impl EditorWindow {
     }
 
     fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
+        self.audio_library.online.cancel_preview();
         self.stop_canvas_text_edit(cx);
         if self.voiceover.is_busy() {
             return;
@@ -7324,6 +7325,8 @@ impl EditorWindow {
         self.set_selection(None, cx);
         self.audio_library.placement = Default::default();
         self.load_audio_library(false, cx);
+        self.audio_library.online.selected = false;
+        self.audio_library.online.cancel_preview();
         cx.notify();
     }
 
@@ -7342,6 +7345,8 @@ impl EditorWindow {
             &self.project,
         );
         self.load_audio_library(false, cx);
+        self.audio_library.online.selected = false;
+        self.audio_library.online.cancel_preview();
         cx.notify();
     }
 
@@ -7422,39 +7427,89 @@ impl EditorWindow {
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
-                if !this.accepts_audio_import(&request) {
-                    this.finish_audio_import(request, Ok(None), window, cx);
-                    return;
-                }
-                match imported.and_then(crate::editor_audio::PreparedLibraryTrack::publish) {
-                    Ok(mut track) => {
-                        let imported = ImportedAudio {
-                            path: track.path.clone(),
-                            name: track.name.clone(),
-                            duration: track.duration,
-                        };
-                        let applied =
-                            this.finish_audio_import(request, Ok(Some(imported)), window, cx);
-                        if applied
-                            || this.project.timeline.as_ref().is_some_and(|timeline| {
-                                timeline
-                                    .audio_segments
-                                    .iter()
-                                    .any(|segment| segment.path == track.path)
-                            })
-                        {
-                            track.keep();
-                        }
-                    }
-                    Err(error) => {
-                        this.finish_audio_import(request, Err(error), window, cx);
-                        this.load_audio_library(true, cx);
-                    }
-                }
+                this.finish_library_track(request, imported, true, window, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn add_online_music(
+        &mut self,
+        track: crate::online_music::OnlineTrack,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let start = self.audio_library.placement.start(self.playhead);
+        let Some(request) = self.begin_audio_import(start, window, cx) else {
+            return;
+        };
+        let request = request.fit_to_project();
+        self.audio_library.online.cancel_preview();
+        self.library_audition = None;
+        let project_path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = gpui_tokio::Tokio::spawn(
+                cx,
+                crate::online_music::download(track.audio.clone(), false),
+            )
+            .await;
+            let imported = match result {
+                Ok(Ok(file)) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            crate::editor_audio::prepare_online_track(&project_path, &track, &file)
+                        })
+                        .await
+                }
+                _ => Err(tr::editor::audio::library::online_download_failed().into()),
+            };
+            this.update_in(cx, |this, window, cx| {
+                this.finish_library_track(request, imported, false, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_library_track(
+        &mut self,
+        request: AudioImportRequest,
+        imported: Result<crate::editor_audio::PreparedLibraryTrack, String>,
+        bundled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.accepts_audio_import(&request) {
+            self.finish_audio_import(request, Ok(None), window, cx);
+            return;
+        }
+        match imported.and_then(crate::editor_audio::PreparedLibraryTrack::publish) {
+            Ok(mut track) => {
+                let imported = ImportedAudio {
+                    path: track.path.clone(),
+                    name: track.name.clone(),
+                    duration: track.duration,
+                };
+                let applied = self.finish_audio_import(request, Ok(Some(imported)), window, cx);
+                if applied
+                    || self.project.timeline.as_ref().is_some_and(|timeline| {
+                        timeline
+                            .audio_segments
+                            .iter()
+                            .any(|segment| segment.path == track.path)
+                    })
+                {
+                    track.keep();
+                }
+            }
+            Err(error) => {
+                self.finish_audio_import(request, Err(error), window, cx);
+                if bundled {
+                    self.load_audio_library(true, cx);
+                }
+            }
+        }
     }
 
     pub(crate) fn import_audio_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
