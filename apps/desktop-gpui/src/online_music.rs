@@ -52,7 +52,7 @@ pub(crate) struct OnlineMusicState {
     failed: bool,
     preview: Option<String>,
     preview_generation: u64,
-    pub(crate) show_bundled: bool,
+    pub(crate) selected: bool,
     shown: usize,
 }
 
@@ -299,9 +299,6 @@ impl EditorWindow {
                     .on_click(cx.listener(|this, _, _, cx| this.load_online_music(cx))),
             );
         }
-        if importing {
-            header = header.child(tr::editor::audio::library::online_adding());
-        }
         let tracks = online.tracks.as_deref().unwrap_or_default();
         let terms = query.split_whitespace().collect::<Vec<_>>();
         let mut matching = tracks
@@ -319,14 +316,21 @@ impl EditorWindow {
                 }
             });
         }
-        if online.tracks.is_some() && !matching.is_empty() {
-            header = header.child(
-                div()
-                    .text_size(gpui::px(12.))
-                    .text_color(Hsla::from(theme.editor.text_2))
-                    .child(tr::editor::audio::library::online_count(matching.len())),
-            );
-        }
+        let status: Option<SharedString> = if importing {
+            Some(tr::editor::audio::library::online_adding().into())
+        } else if online.loading && tracks.is_empty() {
+            Some(tr::editor::audio::library::metadata_loading().into())
+        } else if online.tracks.is_some() {
+            Some(tr::editor::audio::library::online_count(matching.len()).into())
+        } else {
+            None
+        };
+        header = header.children(status.map(|status| {
+            div()
+                .text_size(gpui::px(12.))
+                .text_color(Hsla::from(theme.editor.text_2))
+                .child(status)
+        }));
         for &track in matching.iter().take(online.shown) {
             let id = format!("online-{}", track.id);
             let playing = self
@@ -430,9 +434,7 @@ impl EditorWindow {
                     })),
             );
         }
-        if online.loading && tracks.is_empty() {
-            results = results.child(tr::editor::audio::library::metadata_loading());
-        } else if online.tracks.is_some() && matching.is_empty() {
+        if online.tracks.is_some() && matching.is_empty() {
             results = results.child(tr::editor::audio::library::online_empty());
         }
         div()

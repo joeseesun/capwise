@@ -161,6 +161,7 @@ pub(crate) struct AudioImportRequest {
     pub generation: u64,
     target_fingerprint: Option<String>,
     add: Option<AudioAddIntent>,
+    fit_to_project: bool,
 }
 
 impl AudioImportRequest {
@@ -181,6 +182,7 @@ impl AudioImportRequest {
             generation,
             target_fingerprint,
             add: None,
+            fit_to_project: false,
         })
     }
 
@@ -199,6 +201,11 @@ impl AudioImportRequest {
             });
         }
         Some(self)
+    }
+
+    pub(crate) fn fit_to_project(mut self) -> Self {
+        self.fit_to_project = true;
+        self
     }
 
     pub(crate) fn start(&self) -> Option<f64> {
@@ -262,13 +269,18 @@ pub(crate) fn apply_audio_add(
         .as_mut()
         .ok_or_else(|| tr::editor::audio::library::timing_changed().to_string())?;
     let (path, name, duration) = asset;
+    let placed_duration = if request.fit_to_project {
+        duration.min(total - intent.start)
+    } else {
+        duration
+    };
     let (lane, range) = audio_import_placement(
         &timeline.audio_segments,
         lane,
         next_lane,
         intent.start,
         total,
-        duration,
+        placed_duration,
     )
     .ok_or_else(|| tr::editor::window::audio_import::move_playhead().to_string())?;
     Ok(crate::editor_edits::insert_audio_segment(
@@ -976,36 +988,34 @@ impl EditorWindow {
             }))
             .into_any_element()
         });
-        let playhead_past_end = !is_replace
-            && self.audio_library.placement == AudioLibraryPlacement::FromPlayhead
-            && audio_import_range(start, self.total_duration(), self.total_duration()).is_none();
-
+        let playhead_past_end = !is_replace && start >= self.total_duration();
         let collection = ui::SegmentedControl::editor(
             &theme,
             "audio-library-collection",
             vec![
                 ui::SegmentOption::new(
-                    tr::editor::audio::library::online_title(),
-                    !self.audio_library.online.show_bundled,
+                    tr::editor::audio::library::bundled_title(),
+                    !self.audio_library.online.selected,
                 ),
                 ui::SegmentOption::new(
-                    tr::editor::audio::library::bundled_title(),
-                    self.audio_library.online.show_bundled,
+                    tr::editor::audio::library::online_title(),
+                    self.audio_library.online.selected,
                 ),
             ],
         )
+        .stretch()
         .text_size(px(12.))
         .on_select(cx.listener(|this, index: &usize, window, cx| {
-            let show_bundled = *index == 1;
-            if this.audio_library.online.show_bundled != show_bundled {
+            let online = *index == 1;
+            if this.audio_library.online.selected != online {
                 this.library_audition = None;
                 this.audio_library.audition_failed = false;
                 this.audio_library.online.cancel_preview();
-                this.audio_library.online.show_bundled = show_bundled;
-                if show_bundled {
-                    this.focus_root(window, cx);
-                } else {
+                this.audio_library.online.selected = online;
+                if online {
                     this.open_online_music(window, cx);
+                } else {
+                    this.focus_root(window, cx);
                 }
                 cx.notify();
             }
@@ -1050,15 +1060,18 @@ impl EditorWindow {
             })
             .child(collection)
             .children(placement)
-            .when(playhead_past_end, |content| {
-                content.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(Hsla::from(theme.editor.text_2))
-                        .child(tr::editor::window::audio_import::move_playhead()),
-                )
-            })
-            .when(self.audio_library.online.show_bundled, |content| {
+            .when(
+                self.audio_library.online.selected && playhead_past_end,
+                |content| {
+                    content.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(theme.editor.text_2))
+                            .child(tr::editor::window::audio_import::move_playhead()),
+                    )
+                },
+            )
+            .when(!self.audio_library.online.selected, |content| {
                 content.child(
                     div()
                         .id("bundled-music-results")
@@ -1117,7 +1130,7 @@ impl EditorWindow {
                         )),
                 )
             })
-            .when(!self.audio_library.online.show_bundled, |content| {
+            .when(self.audio_library.online.selected, |content| {
                 content.child(self.render_online_music(importing, playhead_past_end, cx))
             })
             .child(sources.flex_shrink_0())

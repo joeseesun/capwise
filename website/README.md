@@ -46,6 +46,8 @@ python3 website/music/publish.py ~/Music/Suno导出 --suno-pro --tag 口播 --pu
 python3 website/music/publish.py --list-qiaomu
 # 上架乔木音乐里明确选中的原创曲目
 python3 website/music/publish.py --from-qiaomu <曲目ID> --suno-pro --tag 片头 --publish
+# 上架已获分发授权的翻唱
+python3 website/music/publish.py --from-qiaomu <曲目ID> --suno-pro --licensed-covers --publish
 # 从曲库去掉一首曲目，保留旧工程使用的音频
 python3 website/music/publish.py --remove <曲目ID> --publish
 ```
@@ -63,4 +65,4 @@ python3 website/music/publish.py --remove <曲目ID> --publish
 }
 ```
 
-`--suno-pro` 表示操作者确认拥有本批曲目的分发和下游配乐授权。乔木音乐导入需逐首指定，工具拒绝标记为翻唱或重混的来源。发布器先生成约 20 秒试听和完整 MP3，再上传按 SHA-256 寻址的音频。所有文件到位后，原子切换目录和曲目页。官网和已具备在线配乐功能的客户端会读取新目录。
+`--suno-pro` 表示操作者确认拥有本批曲目的分发和下游配乐授权。乔木音乐导入需逐首指定。翻唱需通过 `--licensed-covers` 确认已经获得配乐分发授权。发布器先生成约 20 秒试听和完整 MP3，再上传按 SHA-256 寻址的音频。所有文件到位后，原子切换目录和曲目页。官网和已具备在线配乐功能的客户端会读取新目录。

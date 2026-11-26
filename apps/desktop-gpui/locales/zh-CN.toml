@@ -1685,7 +1685,7 @@ uploading = "正在上传"
 
 [editor.audio.library]
 online_title = "在线配乐"
-online_search = "搜索歌曲、风格或用途"
+online_search = "搜索歌名、作者、风格或用途"
 online_clear = "清除搜索"
 online_count = { other = "{count} 首配乐" }
 online_retry = "在线曲库加载失败，重试"

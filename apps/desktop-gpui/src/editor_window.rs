@@ -7325,9 +7325,8 @@ impl EditorWindow {
         self.set_selection(None, cx);
         self.audio_library.placement = Default::default();
         self.load_audio_library(false, cx);
-        if !self.audio_library.online.show_bundled {
-            self.open_online_music(window, cx);
-        }
+        self.audio_library.online.selected = false;
+        self.audio_library.online.cancel_preview();
         cx.notify();
     }
 
@@ -7346,9 +7345,8 @@ impl EditorWindow {
             &self.project,
         );
         self.load_audio_library(false, cx);
-        if !self.audio_library.online.show_bundled {
-            self.open_online_music(window, cx);
-        }
+        self.audio_library.online.selected = false;
+        self.audio_library.online.cancel_preview();
         cx.notify();
     }
 
@@ -7446,6 +7444,7 @@ impl EditorWindow {
         let Some(request) = self.begin_audio_import(start, window, cx) else {
             return;
         };
+        let request = request.fit_to_project();
         self.audio_library.online.cancel_preview();
         self.library_audition = None;
         let project_path = self.project_path.clone();

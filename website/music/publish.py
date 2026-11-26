@@ -145,7 +145,7 @@ def source_url(value):
     return value
 
 
-def qiaomu_metadata(identity, scratch, tags):
+def qiaomu_metadata(identity, scratch, tags, licensed_covers):
     if not re.fullmatch(r"[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", identity):
         raise ValueError("乔木音乐曲目 ID 应为 32 位十六进制或标准 UUID")
     item = json.loads(request(f"{QIAOMU}/api/public/tracks/{identity}", MAX_CATALOG))
@@ -153,8 +153,13 @@ def qiaomu_metadata(identity, scratch, tags):
     if item.get("id") != identity or item.get("contentType") != "audio/mpeg":
         raise ValueError(f"乔木音乐接口返回了不匹配的曲目：{identity}")
     provenance = item.get("source", "").lower()
-    if "suno" not in provenance or any(word in provenance for word in ("翻唱", "cover", "remix", "重混")):
-        raise ValueError(f"该曲目未标为 Suno 原创，或标记为翻唱或重混：{item['title']}")
+    if "suno" not in provenance or any(word in provenance for word in ("remix", "重混")):
+        raise ValueError(f"该曲目来源不支持上架：{item['title']}")
+    is_cover = any(word in provenance for word in ("翻唱", "cover"))
+    if is_cover and not licensed_covers:
+        raise ValueError(f"该曲目标记为翻唱。确认分发授权后使用 --licensed-covers：{item['title']}")
+    if is_cover:
+        tags = list(dict.fromkeys(["授权翻唱", *tags]))[:8]
     audio_url = item["audioUrl"]
     prefix = f"{QIAOMU}/music/"
     filename = audio_url.removeprefix(prefix)
@@ -378,6 +383,7 @@ def main():
     parser.add_argument("folder", nargs="?", type=Path, help="Suno 导出的 MP3 或 WAV 文件目录")
     parser.add_argument("--seed", action="store_true", help="导入灵录内置的四首 CC0 配乐")
     parser.add_argument("--suno-pro", action="store_true", help="确认对该批原创曲目有配乐分发授权")
+    parser.add_argument("--licensed-covers", action="store_true", help="确认所选翻唱已取得配乐分发授权")
     parser.add_argument("--from-qiaomu", action="append", default=[], metavar="ID", help="从乔木音乐导入指定曲目 ID，可多次使用")
     parser.add_argument("--list-qiaomu", action="store_true", help="列出乔木音乐的公开曲目和 ID")
     parser.add_argument("--tag", action="append", default=[], help="批次标签，可多次使用")
@@ -393,6 +399,8 @@ def main():
         return
     if (args.folder or args.from_qiaomu) and not args.suno_pro:
         parser.error("确认授权后使用 --suno-pro")
+    if args.licensed_covers and not args.from_qiaomu:
+        parser.error("--licensed-covers 需配合 --from-qiaomu")
     if args.publish and args.base:
         parser.error("线上发布以服务器上的当前目录为基准")
     if not args.publish and not args.output:
@@ -427,7 +435,7 @@ def main():
         if args.folder:
             inputs.extend(input_files(args.folder, tags))
         for identity in dict.fromkeys(args.from_qiaomu):
-            inputs.append(qiaomu_metadata(identity, scratch, tags))
+            inputs.append(qiaomu_metadata(identity, scratch, tags, args.licensed_covers))
         batch_sources = set()
         for path, meta in inputs:
             if not 0 < path.stat().st_size <= 512 * 1024 * 1024:
