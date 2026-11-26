@@ -3497,6 +3497,14 @@ pub struct OverlayTrack {
     pub track: u32,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionRecognition {
+    pub engine: String,
+    pub model: String,
+    pub language: String,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectConfiguration {
@@ -3519,6 +3527,8 @@ pub struct ProjectConfiguration {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlay_order_with_shapes: Vec<OverlayTrack>,
     pub captions: Option<CaptionsData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption_recognition: Option<CaptionRecognition>,
     pub keyboard: Option<KeyboardData>,
     pub clips: Vec<ClipConfiguration>,
     pub annotations: Vec<Annotation>,
@@ -3604,6 +3614,7 @@ impl Default for ProjectConfiguration {
             overlay_order: Vec::new(),
             overlay_order_with_shapes: Vec::new(),
             captions: Default::default(),
+            caption_recognition: None,
             keyboard: Default::default(),
             clips: Default::default(),
             annotations: Default::default(),

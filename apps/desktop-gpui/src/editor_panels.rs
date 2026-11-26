@@ -2938,7 +2938,7 @@ impl EditorWindow {
                 this.on_field_event(key, event, window, cx);
                 if matches!(key, FieldKey::CaptionText(_))
                     && matches!(event, ui::TextInputEvent::Changed)
-                    && (!window.is_window_active() || !input.read(cx).is_focused(window))
+                    && !input.read(cx).is_focused(window)
                 {
                     this.commit_field(key, true, window, cx);
                     this.end_field_edit(cx);
@@ -3204,7 +3204,9 @@ impl EditorWindow {
         }
         // A different field taking over closes the previous bracket first.
         self.end_field_edit(cx);
-        self.history.pause();
+        if !matches!(key, FieldKey::CaptionText(_)) {
+            self.history.pause();
+        }
         self.field_editing = Some(key);
     }
 
@@ -3212,8 +3214,9 @@ impl EditorWindow {
         if let Some(key) = self.field_editing.take() {
             if matches!(key, FieldKey::CaptionText(_)) {
                 self.commit_caption_text_draft(cx);
+            } else {
+                self.history.resume(&self.project);
             }
-            self.history.resume(&self.project);
             cx.notify();
         }
     }
@@ -3253,9 +3256,10 @@ impl EditorWindow {
         };
         if let FieldKey::CaptionText(index) = key {
             if final_commit {
-                self.commit_caption_text_draft(cx);
-                self.queue_caption_translation_update(window, cx);
-                self.note_project_edit("caption-text");
+                if self.commit_caption_text_draft(cx) {
+                    self.queue_caption_translation_update(window, cx);
+                    self.note_project_edit("caption-text");
+                }
             } else {
                 self.queue_sidebar_caption_text(index, input.read(cx).shared_text(), cx);
             }

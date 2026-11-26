@@ -3979,6 +3979,22 @@ previous_sentence = "Previous sentence"
 next_sentence = "Next sentence"
 use_steady = "Switch to steady scroll"
 
+[editor.regenerate]
+open = "Regenerate subtitles"
+previous = "Use previous model"
+change_model = "Change model"
+unknown = "Previous model unavailable or unrecorded"
+suspect = "Suspect sections only"
+full = "Entire video"
+draft = "Generate preview"
+validating = "Checking subtitles against the recording…"
+verified = "{count} subtitles checked against the recording"
+listen = "Play the original audio"
+apply = "Replace subtitles"
+unverified = "The audio check could not verify these subtitles. Choose a different model or scope."
+model_changed = "The saved model is no longer configured. Choose a model again."
+cloud = "Audio is sent to this service. Verification may make additional billable requests."
+
 [editor.workbench]
 captions_hidden = "Captions are hidden in the preview and export."
 content = "Content"

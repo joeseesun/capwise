@@ -432,7 +432,7 @@ fn asr_text(reply: &str) -> &str {
         .trim_end_matches("</asr_text>")
 }
 
-fn has_repeated_passage(text: &str) -> bool {
+pub(crate) fn has_repeated_passage(text: &str) -> bool {
     const MIN_PERIOD: usize = 8;
     const MAX_PERIOD: usize = 128;
     const COPIES: usize = 5;
@@ -1076,7 +1076,7 @@ pub fn transcribe(
     if service.needs_key && key.is_empty() {
         return Err(tr::asr::no_key((service.name)()));
     }
-    run(service, &service.endpoint(), &key, samples, hints)
+    run(service, &service.endpoint(), &key, samples, hints, false)
 }
 
 /// Recognise with Qwen3-ASR behind a local `llama-server` at `base_url`.
@@ -1090,7 +1090,70 @@ pub fn transcribe_llama(
         base_url: base_url.to_string(),
         model: model.to_string(),
     };
-    run(&LLAMA_QWEN, &endpoint, "", samples, hints)
+    run(&LLAMA_QWEN, &endpoint, "", samples, hints, false)
+}
+
+pub(crate) struct VerifiedRecognition {
+    pub segments: Vec<CaptionSegment>,
+    pub reference: Option<Vec<CaptionSegment>>,
+}
+
+pub(crate) fn verify_cloud(
+    id: &str,
+    expected_model: &str,
+    samples: &[f32],
+    hints: &[String],
+) -> Result<VerifiedRecognition, String> {
+    let service = service(id).ok_or_else(|| tr::editor::regenerate::model_changed().to_string())?;
+    let endpoint = service.endpoint();
+    if endpoint.model != expected_model || !service.ready() {
+        return Err(tr::editor::regenerate::model_changed().into());
+    }
+    let key = ai_store::key(Kind::Asr, id).unwrap_or_default();
+    verify_recognition(service, &endpoint, &key, samples, hints)
+}
+
+pub(crate) fn verify_llama(
+    base_url: &str,
+    model: &str,
+    samples: &[f32],
+) -> Result<VerifiedRecognition, String> {
+    let endpoint = Endpoint {
+        base_url: base_url.into(),
+        model: model.into(),
+    };
+    verify_recognition(&LLAMA_QWEN, &endpoint, "", samples, &[])
+}
+
+fn verify_recognition(
+    service: &'static AsrService,
+    endpoint: &Endpoint,
+    key: &str,
+    samples: &[f32],
+    hints: &[String],
+) -> Result<VerifiedRecognition, String> {
+    let segments = run(service, endpoint, key, samples, hints, false)?;
+    let reference = if service.protocol == Protocol::Doubao {
+        None
+    } else {
+        Some(run(service, endpoint, key, samples, &[], true)?)
+    };
+    Ok(VerifiedRecognition {
+        segments,
+        reference,
+    })
+}
+
+fn speech_bounds(samples: &[f32]) -> Option<std::ops::Range<usize>> {
+    let frame_size = SAMPLE_RATE / FRAMES_PER_SECOND;
+    let power: Vec<f32> = samples
+        .chunks(frame_size)
+        .map(|frame| frame.iter().map(|sample| sample * sample).sum::<f32>() / frame.len() as f32)
+        .collect();
+    let threshold = (power.iter().copied().fold(0.0, f32::max) * 0.004).max(0.000_009);
+    let start = power.iter().position(|level| *level >= threshold)?;
+    let end = power.iter().rposition(|level| *level >= threshold)? + 1;
+    Some(start * frame_size..(end * frame_size).min(samples.len()))
 }
 
 fn run(
@@ -1099,6 +1162,7 @@ fn run(
     key: &str,
     samples: &[f32],
     hints: &[String],
+    reference: bool,
 ) -> Result<Vec<CaptionSegment>, String> {
     let context = context_for(service, hints);
     let request = Request {
@@ -1110,7 +1174,9 @@ fn run(
     let total = samples.len() as f64 / SAMPLE_RATE as f64;
     let streaming =
         service.protocol == Protocol::Doubao && doubao_stream::selected(&endpoint.model);
-    let (target, maximum) = if streaming {
+    let (target, maximum) = if reference {
+        (4.0, 5.5)
+    } else if streaming {
         (25.0, 40.0)
     } else {
         (service.chunk_target, service.chunk_max)
@@ -1141,7 +1207,18 @@ fn run(
                 let to = ((end * SAMPLE_RATE as f64) as usize).min(samples.len());
                 let piece = &samples[from.min(to)..to];
                 let (client, request) = (&client, &request);
-                async move { recognize(client, request, piece).await.map(|found| (start, found)) }
+                async move {
+                    let (piece, offset) = if reference {
+                        let Some(bounds) = speech_bounds(piece) else {
+                            return Ok((start, Vec::new()));
+                        };
+                        let offset = bounds.start as f64 / SAMPLE_RATE as f64;
+                        (&piece[bounds], offset)
+                    } else {
+                        (piece, 0.0)
+                    };
+                    recognize(client, request, piece).await.map(|found| (start + offset, found))
+                }
             }))
             .buffered(concurrency)
             .collect()

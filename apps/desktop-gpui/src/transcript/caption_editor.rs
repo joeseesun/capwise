@@ -534,9 +534,7 @@ impl EditorWindow {
                                                 window,
                                                 cx,
                                             );
-                                            if !window.is_window_active()
-                                                || !input.read(cx).is_focused(window)
-                                            {
+                                            if !input.read(cx).is_focused(window) {
                                                 this.commit_caption_editor_edit(window, cx);
                                             }
                                         }

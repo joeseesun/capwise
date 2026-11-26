@@ -2001,6 +2001,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         overlay_order: _,
         overlay_order_with_shapes: _,
         captions: _,
+        caption_recognition: _,
         keyboard: _,
         clips,
         annotations: _,

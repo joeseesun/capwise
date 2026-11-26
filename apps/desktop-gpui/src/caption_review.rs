@@ -194,7 +194,7 @@ impl Processing {
     }
 }
 
-fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     use std::io::Write as _;
     let staging = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| {

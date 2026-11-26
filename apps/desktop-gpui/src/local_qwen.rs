@@ -312,6 +312,14 @@ pub fn transcribe(samples: &[f32], hints: &[String]) -> Result<Vec<CaptionSegmen
     crate::asr_cloud::transcribe_llama(&format!("{}/v1", server.base_url), MODEL, samples, hints)
 }
 
+pub(crate) fn verified(samples: &[f32]) -> Result<crate::asr_cloud::VerifiedRecognition, String> {
+    if !installed() {
+        return Err(tr::transcription::qwen_not_installed().into());
+    }
+    let server = start_server()?;
+    crate::asr_cloud::verify_llama(&format!("{}/v1", server.base_url), MODEL, samples)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -825,6 +825,7 @@ pub struct SidebarState {
     frame_tab: FrameTab,
     pub caption_tab: crate::editor_workbench::CaptionTab,
     pub caption_page: usize,
+    pub(crate) caption_regeneration: crate::caption_regeneration::RegenerationUi,
     pub(crate) caption_reveal: Option<usize>,
     /// `backgroundSourceTab` (`:1799-1802`).
     pub source_tab: SourceTab,
@@ -953,6 +954,7 @@ impl SidebarState {
             frame_tab: FrameTab::default(),
             caption_tab: crate::editor_workbench::CaptionTab::Content,
             caption_page: 0,
+            caption_regeneration: Default::default(),
             caption_reveal: None,
             source_tab: initial_source_tab(config),
             wallpaper_theme: 0,
