@@ -101,6 +101,7 @@ mod mode_select_window;
 mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;
+mod online_music;
 mod overlay_backdrop;
 mod perf_marks;
 mod permission_guide;

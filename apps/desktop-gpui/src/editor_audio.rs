@@ -1,5 +1,5 @@
 /*
- * [INPUT]: 读取内置配乐资源和项目时间线。
+ * [INPUT]: 读取内置配乐、在线下载和项目时间线。
  * [OUTPUT]: 提供音频选择、试听及项目音频素材的导入。
  * [POS]: 编辑器的音频入口。项目保存由 editor_window 发起。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -81,6 +81,7 @@ pub(crate) struct LibraryTrackMetadata {
 
 #[derive(Default)]
 pub(crate) struct AudioLibraryState {
+    pub(crate) online: crate::online_music::OnlineMusicState,
     pub(crate) audition_failed: bool,
     pub(crate) placement: AudioLibraryPlacement,
     pub(crate) tracks: HashMap<&'static str, Result<LibraryTrackMetadata, String>>,
@@ -373,7 +374,7 @@ fn bundled_track_path_from(
 /// Plays a library track on its own output stream for as long as this value
 /// lives.
 pub(crate) struct LibraryAudition {
-    pub(crate) id: &'static str,
+    pub(crate) id: SharedString,
     started: std::time::Instant,
     finished: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
@@ -381,7 +382,12 @@ pub(crate) struct LibraryAudition {
 }
 
 impl LibraryAudition {
-    fn start(id: &'static str, path: PathBuf, gain_db: f32) -> Result<Self, String> {
+    fn start(
+        id: SharedString,
+        path: PathBuf,
+        gain_db: f32,
+        temporary: Option<tempfile::TempPath>,
+    ) -> Result<Self, String> {
         let (stop, stop_requested) = std::sync::mpsc::channel();
         let finished = Arc::new(AtomicBool::new(false));
         let finished_flag = finished.clone();
@@ -390,6 +396,7 @@ impl LibraryAudition {
         std::thread::Builder::new()
             .name("library-audition".into())
             .spawn(move || {
+                let _temporary = temporary;
                 let result =
                     std::panic::catch_unwind(|| play_audition(&path, &stop_requested, gain_db));
                 match result {
@@ -627,6 +634,42 @@ pub(crate) fn prepare_library_track(
     if !AUDIO_LIBRARY.iter().any(|(known, _)| *known == id) {
         return Err(library_source_error("unknown library track"));
     }
+    prepare_downloaded_track(project, id, name, source)
+}
+
+pub(crate) fn prepare_online_track(
+    project: &Path,
+    track: &crate::online_music::OnlineTrack,
+    path: &Path,
+) -> Result<PreparedLibraryTrack, String> {
+    let source = LibraryTrackMetadata {
+        path: path.to_path_buf(),
+        hash: hash_audio_file(path)?,
+        duration: validate_audio_duration(path)?,
+    };
+    if source
+        .hash
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        != track.audio
+    {
+        return Err(tr::editor::audio::library::source_changed().into());
+    }
+    prepare_downloaded_track(
+        project,
+        &format!("online-{}", track.id),
+        &track.title,
+        &source,
+    )
+}
+
+fn prepare_downloaded_track(
+    project: &Path,
+    id: &str,
+    name: &str,
+    source: &LibraryTrackMetadata,
+) -> Result<PreparedLibraryTrack, String> {
     let directory = library_audio_directory(project)?;
     let directory_identity = std::fs::symlink_metadata(&directory).map_err(library_source_error)?;
     let hash = source
@@ -756,6 +799,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn toggle_library_audition(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        self.audio_library.online.cancel_preview();
         if let Some(path) = bundled_track_path(id) {
             self.toggle_audio_audition(id, path, cx);
         }
@@ -777,6 +821,26 @@ impl EditorWindow {
         gain_db: f32,
         cx: &mut Context<Self>,
     ) {
+        self.play_library_audition(id.into(), path, gain_db, None, cx);
+    }
+
+    pub(crate) fn play_downloaded_audition(
+        &mut self,
+        id: SharedString,
+        file: tempfile::TempPath,
+        cx: &mut Context<Self>,
+    ) {
+        self.play_library_audition(id, file.to_path_buf(), 0.0, Some(file), cx);
+    }
+
+    fn play_library_audition(
+        &mut self,
+        id: SharedString,
+        path: PathBuf,
+        gain_db: f32,
+        temporary: Option<tempfile::TempPath>,
+        cx: &mut Context<Self>,
+    ) {
         self.audio_library.audition_failed = false;
         let was_playing = self
             .library_audition
@@ -786,7 +850,7 @@ impl EditorWindow {
             if self.playing {
                 self.stop_playback(cx);
             }
-            match LibraryAudition::start(id, path, gain_db) {
+            match LibraryAudition::start(id, path, gain_db, temporary) {
                 Ok(audition) => {
                     let started = audition.started;
                     self.library_audition = Some(audition);
@@ -846,6 +910,7 @@ impl EditorWindow {
             .label(tr::editor::audio::library::done())
             .on_click(cx.listener(|this, _, window, cx| {
                 this.audio_picker = None;
+                this.audio_library.online.cancel_preview();
                 this.library_audition = None;
                 this.focus_root(window, cx);
                 cx.notify();
@@ -915,15 +980,57 @@ impl EditorWindow {
             && self.audio_library.placement == AudioLibraryPlacement::FromPlayhead
             && audio_import_range(start, self.total_duration(), self.total_duration()).is_none();
 
+        let collection = ui::SegmentedControl::editor(
+            &theme,
+            "audio-library-collection",
+            vec![
+                ui::SegmentOption::new(
+                    tr::editor::audio::library::online_title(),
+                    !self.audio_library.online.show_bundled,
+                ),
+                ui::SegmentOption::new(
+                    tr::editor::audio::library::bundled_title(),
+                    self.audio_library.online.show_bundled,
+                ),
+            ],
+        )
+        .text_size(px(12.))
+        .on_select(cx.listener(|this, index: &usize, window, cx| {
+            let show_bundled = *index == 1;
+            if this.audio_library.online.show_bundled != show_bundled {
+                this.library_audition = None;
+                this.audio_library.audition_failed = false;
+                this.audio_library.online.cancel_preview();
+                this.audio_library.online.show_bundled = show_bundled;
+                if show_bundled {
+                    this.focus_root(window, cx);
+                } else {
+                    this.open_online_music(window, cx);
+                }
+                cx.notify();
+            }
+        }));
+        let placement = placement.map(|placement| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .flex_wrap()
+                .gap(px(8.))
+                .text_size(px(12.))
+                .text_color(Hsla::from(theme.editor.text_2))
+                .child(tr::editor::audio::library::placement_title())
+                .child(placement)
+        });
+
         div()
             .id("audio-library")
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
             .p(px(16.))
-            .gap(px(16.))
+            .gap(px(12.))
             .child(crate::editor_sidebar::tab_header(
                 &theme,
                 if is_replace {
@@ -941,82 +1048,79 @@ impl EditorWindow {
                         .child(tr::editor::audio::library::audition_failed()),
                 )
             })
-            .child(sources)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .gap(px(8.))
-                            .min_h(px(28.))
-                            .child(crate::editor_sidebar::section_title(
-                                &theme,
-                                tr::editor::audio::library::bundled_title(),
-                            ))
-                            .children(placement),
-                    )
-                    .when(playhead_past_end, |content| {
-                        content.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(Hsla::from(theme.editor.text_2))
-                                .child(tr::editor::window::audio_import::move_playhead()),
+            .child(collection)
+            .children(placement)
+            .when(playhead_past_end, |content| {
+                content.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.editor.text_2))
+                        .child(tr::editor::window::audio_import::move_playhead()),
+                )
+            })
+            .when(self.audio_library.online.show_bundled, |content| {
+                content.child(
+                    div()
+                        .id("bundled-music-results")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .when(
+                            self.audio_library.tracks.values().any(Result::is_err),
+                            |content| {
+                                content.child(
+                                    ui::EditorButton::plain(&theme, "audio-library-retry-metadata")
+                                        .tinted(&theme)
+                                        .label(tr::editor::audio::library::retry_metadata())
+                                        .disabled(self.audio_library.loading || importing)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.load_audio_library(true, cx)
+                                        })),
+                                )
+                            },
                         )
-                    })
-                    .when(
-                        self.audio_library.tracks.values().any(Result::is_err),
-                        |content| {
-                            content.child(
-                                ui::EditorButton::plain(&theme, "audio-library-retry-metadata")
-                                    .tinted(&theme)
-                                    .label(tr::editor::audio::library::retry_metadata())
-                                    .disabled(self.audio_library.loading || importing)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.load_audio_library(true, cx)
-                                    })),
-                            )
-                        },
-                    )
-                    .child(div().flex().flex_col().gap(px(2.)).children(
-                        AUDIO_LIBRARY.iter().copied().map(|(id, name)| {
-                            let auditioning = self
-                                .library_audition
-                                .as_ref()
-                                .is_some_and(|audition| audition.id == id);
-                            let metadata = self.audio_library.tracks.get(id);
-                            let full = metadata
-                                .and_then(|result| result.as_ref().ok())
-                                .map(|track| track.duration);
-                            let range = full.and_then(|duration| {
-                                audio_import_range(start, self.total_duration(), duration)
-                            });
-                            let description: SharedString = match (metadata, full) {
-                                (_, Some(duration)) => {
-                                    crate::editor_timeline::format_time(duration).into()
-                                }
-                                (Some(Err(_)), _) => {
-                                    tr::editor::audio::library::metadata_failed().into()
-                                }
-                                _ => tr::editor::audio::library::metadata_loading().into(),
-                            };
-                            render_library_row(
-                                &theme,
-                                id,
-                                name,
-                                importing || full.is_none() || (!is_replace && range.is_none()),
-                                auditioning,
-                                description,
-                                cx,
-                            )
-                        }),
-                    )),
-            )
+                        .child(div().flex().flex_col().gap(px(2.)).children(
+                            AUDIO_LIBRARY.iter().copied().map(|(id, name)| {
+                                let auditioning = self
+                                    .library_audition
+                                    .as_ref()
+                                    .is_some_and(|audition| audition.id.as_ref() == id);
+                                let metadata = self.audio_library.tracks.get(id);
+                                let full = metadata
+                                    .and_then(|result| result.as_ref().ok())
+                                    .map(|track| track.duration);
+                                let range = full.and_then(|duration| {
+                                    audio_import_range(start, self.total_duration(), duration)
+                                });
+                                let description: SharedString = match (metadata, full) {
+                                    (_, Some(duration)) => {
+                                        crate::editor_timeline::format_time(duration).into()
+                                    }
+                                    (Some(Err(_)), _) => {
+                                        tr::editor::audio::library::metadata_failed().into()
+                                    }
+                                    _ => tr::editor::audio::library::metadata_loading().into(),
+                                };
+                                render_library_row(
+                                    &theme,
+                                    id,
+                                    name,
+                                    importing || full.is_none() || (!is_replace && range.is_none()),
+                                    auditioning,
+                                    description,
+                                    cx,
+                                )
+                            }),
+                        )),
+                )
+            })
+            .when(!self.audio_library.online.show_bundled, |content| {
+                content.child(self.render_online_music(importing, playhead_past_end, cx))
+            })
+            .child(sources.flex_shrink_0())
             .into_any_element()
     }
 }
