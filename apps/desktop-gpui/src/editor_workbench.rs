@@ -495,7 +495,7 @@ fn caption_reveal_delta(viewport: Bounds<Pixels>, row: Bounds<Pixels>) -> Pixels
 }
 
 /// `m:ss` -- enough to find a line; exact timing lives in the line's editor.
-fn workbench_time(seconds: f64) -> String {
+pub(crate) fn workbench_time(seconds: f64) -> String {
     let seconds = seconds.max(0.).floor() as u64;
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
