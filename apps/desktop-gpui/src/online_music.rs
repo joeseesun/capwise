@@ -319,7 +319,7 @@ impl EditorWindow {
         let status: Option<SharedString> = if importing {
             Some(tr::editor::audio::library::online_adding().into())
         } else if online.loading && tracks.is_empty() {
-            Some(tr::editor::audio::library::metadata_loading().into())
+            Some(tr::editor::audio::library::online_loading().into())
         } else if online.tracks.is_some() {
             Some(tr::editor::audio::library::online_count(matching.len()).into())
         } else {

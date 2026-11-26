@@ -1688,6 +1688,7 @@ uploading = "Uploading"
 [editor.audio.library]
 online_title = "Online music"
 online_search = "Search by track, genre or use"
+online_loading = "Loading online music…"
 online_clear = "Clear search"
 online_count = { one = "{count} track", other = "{count} tracks" }
 online_retry = "Couldn’t load online music. Retry"

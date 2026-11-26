@@ -248,6 +248,12 @@ impl AudioImportRequest {
     }
 }
 
+pub(crate) fn online_music_end(project: &ProjectConfiguration, total: f64) -> f64 {
+    project
+        .title_card(cap_project::TitleCardRole::Outro)
+        .map_or(total, |outro| total.min(outro.start))
+}
+
 pub(crate) fn apply_audio_add(
     project: &mut ProjectConfiguration,
     request: &AudioImportRequest,
@@ -264,16 +270,16 @@ pub(crate) fn apply_audio_add(
         .filter(|intent| intent.total == total)
         .filter(|_| request.accepts(Some(request.picker), request.generation, project))
         .ok_or_else(|| tr::editor::audio::library::timing_changed().to_string())?;
+    let (path, name, duration) = asset;
+    let placed_duration = if request.fit_to_project {
+        duration.min(online_music_end(project, total) - intent.start)
+    } else {
+        duration
+    };
     let timeline = project
         .timeline
         .as_mut()
         .ok_or_else(|| tr::editor::audio::library::timing_changed().to_string())?;
-    let (path, name, duration) = asset;
-    let placed_duration = if request.fit_to_project {
-        duration.min(total - intent.start)
-    } else {
-        duration
-    };
     let (lane, range) = audio_import_placement(
         &timeline.audio_segments,
         lane,
@@ -988,7 +994,8 @@ impl EditorWindow {
             }))
             .into_any_element()
         });
-        let playhead_past_end = !is_replace && start >= self.total_duration();
+        let playhead_past_end =
+            !is_replace && start >= online_music_end(&self.project, self.total_duration());
         let collection = ui::SegmentedControl::editor(
             &theme,
             "audio-library-collection",
@@ -1317,6 +1324,48 @@ mod tests {
                 original_video
             );
         }
+    }
+
+    #[test]
+    fn online_music_keeps_outro_and_project_duration() {
+        let mut project = music_project();
+        project
+            .upsert_title_card(cap_project::TextSegment::new_title_card(
+                cap_project::TitleCardRole::Outro,
+                "End",
+            ))
+            .unwrap();
+        let total = project.timeline.as_ref().unwrap().duration();
+        let outro_start = project
+            .title_card(cap_project::TitleCardRole::Outro)
+            .unwrap()
+            .start;
+        let request = AudioImportRequest::new(AudioPicker::Add { lane: 0 }, 4, &project)
+            .unwrap()
+            .capture_start(50., total, &project)
+            .unwrap()
+            .fit_to_project();
+        let index = super::apply_audio_add(
+            &mut project,
+            &request,
+            1,
+            total,
+            ("full.mp3".into(), "Full song".into(), 200.),
+        )
+        .unwrap();
+        project.normalize_title_cards().unwrap();
+        let timeline = project.timeline.as_ref().unwrap();
+        let added = &timeline.audio_segments[index];
+        assert_eq!(added.start..added.end, 50.0..outro_start);
+        assert_eq!(added.duration, Some(200.));
+        assert_eq!(timeline.duration(), total);
+        assert_eq!(
+            project
+                .title_card(cap_project::TitleCardRole::Outro)
+                .unwrap()
+                .start,
+            outro_start
+        );
     }
 
     #[test]
