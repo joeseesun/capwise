@@ -1,3 +1,9 @@
+/*
+ * [INPUT]: 读取内置配乐资源和项目时间线。
+ * [OUTPUT]: 提供音频选择、试听及项目音频素材的导入。
+ * [POS]: 编辑器的音频入口。项目保存由 editor_window 发起。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::HashMap,
@@ -25,6 +31,10 @@ pub const AUDIO_LIBRARY: &[(&str, &str)] = &[
     ("consistent-groove", "Consistent Groove"),
     ("instrumental-bed", "Instrumental Bed"),
     ("instrumental-fade-out", "Instrumental Fade Out"),
+    ("exploration-theme", "Exploration Theme"),
+    ("beyond-piano-edit", "Beyond (Piano Edit)"),
+    ("coffee-house-bump", "Coffee House Bump"),
+    ("electron", "Electron"),
     ("lofi-beats-mirostar", "Lofi Beats"),
     ("raindrops-lofi-sleep-bluelike", "Raindrops"),
     ("sunday-mood-lofi-cafe-upbeat-bluelike", "Sunday Mood"),

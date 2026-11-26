@@ -14,3 +14,14 @@ This notice records their provenance and file integrity; it does not identify a 
 | instrumental-fade-out.mp3 | `1bc361817c538b9ca38cb6dde2efcab21e5ddb2a40e5928e5408008fed18b3d4` |
 
 The first-launch welcome uses `../onboarding/friendly-welcome-intro.mp3`, derived from the first 22 seconds of `friendly-welcome.mp3`, with -4 dB gain, a 1.2-second fade-in and a 4-second fade-out. The full soundtrack remains available in the music library.
+
+## CC0 recordings
+
+The artists released these recordings under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). The source pages and checksums identify the recordings bundled with Capwise.
+
+| File | Source | Artist | Encoding | SHA-256 |
+| --- | --- | --- | --- | --- |
+| `exploration-theme.mp3` | [Exploration Theme](https://opengameart.org/content/exploration-theme) | Cleyton Kauffman | 192 kbps MP3 from WAV | `65b452aeaf9cc3f0d592bc4909cac367577ce0c4043a015276ed48f99d7e84c4` |
+| `beyond-piano-edit.mp3` | [Beyond (Piano Edit)](https://freemusicarchive.org/music/pablo-perez/single/beyond-piano-edit/) | Pablo Perez | Original MP3 | `6cca5621080f091d4eb53f83ebfaff2683b937ed1eec1f80c0546a9f8ec1f3e2` |
+| `coffee-house-bump.mp3` | [Coffee House Bump](https://opengameart.org/content/coffee-house-bump) | OatCog | 192 kbps MP3 from WAV | `d8285fdb48c664b05752dbdc547db7e30e17de128250af6b3e0fccf0bfe3b079` |
+| `electron.mp3` | [Electron](https://freemusicarchive.org/music/beat-mekanik/single/electron-free-stems/) | JMHBM (Beat Mekanik) | Original MP3 | `d2723c23900ba6fd5ebbb58995e399182a9f06d6453792f2855aa7c2b7edba27` |
