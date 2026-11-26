@@ -146,8 +146,8 @@ def source_url(value):
 
 
 def qiaomu_metadata(identity, scratch, tags):
-    if not re.fullmatch(r"[0-9a-f]{32}", identity):
-        raise ValueError("乔木音乐曲目 ID 应为 32 位小写十六进制")
+    if not re.fullmatch(r"[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", identity):
+        raise ValueError("乔木音乐曲目 ID 应为 32 位十六进制或标准 UUID")
     item = json.loads(request(f"{QIAOMU}/api/public/tracks/{identity}", MAX_CATALOG))
     item = item.get("track", item)
     if item.get("id") != identity or item.get("contentType") != "audio/mpeg":
@@ -155,9 +155,15 @@ def qiaomu_metadata(identity, scratch, tags):
     provenance = item.get("source", "").lower()
     if "suno" not in provenance or any(word in provenance for word in ("翻唱", "cover", "remix", "重混")):
         raise ValueError(f"该曲目未标为 Suno 原创，或标记为翻唱或重混：{item['title']}")
-    if not re.fullmatch(r"https://music\.qiaomu\.ai/music/[a-zA-Z0-9._-]+\.mp3", item["audioUrl"]):
+    audio_url = item["audioUrl"]
+    prefix = f"{QIAOMU}/music/"
+    filename = audio_url.removeprefix(prefix)
+    decoded = urllib.parse.unquote(filename, errors="strict")
+    if (not audio_url.startswith(prefix)
+            or not re.fullmatch(r"(?:[a-zA-Z0-9._-]|%[0-9a-fA-F]{2})+\.mp3", filename)
+            or any(char in "/\\%" or ord(char) < 32 for char in decoded)):
         raise ValueError("乔木音乐接口返回了未知音频地址")
-    data = request(item["audioUrl"], MAX_AUDIO)
+    data = request(audio_url, MAX_AUDIO)
     if len(data) != item.get("size"):
         raise ValueError(f"乔木音乐音频长度不匹配：{identity}")
     path = scratch / f"{identity}.mp3"
