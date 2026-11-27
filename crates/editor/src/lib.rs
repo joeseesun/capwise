@@ -47,9 +47,7 @@ pub use editor_instance::{
 pub use export_audio::{
     ExportAudioError, ExportAudioPreparation, ExportAudioRenderer, ExportAudioValidation,
 };
-pub use playback::{
-    Playback, PlaybackEvent, PlaybackHandle, PlaybackStartError, PreviewPlayback, VoiceoverPreview,
-};
+pub use playback::{Playback, PlaybackEvent, PlaybackHandle, PlaybackStartError, VoiceoverPreview};
 pub use preparing_editor::{PreparingEditorPhase, PreparingEditorProgress, PreparingPlaybackState};
 pub use preparing_handoff::{
     PreparingPlaybackAdoption, PreparingPlaybackHandoff, PreparingPlaybackIntent,

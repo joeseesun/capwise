@@ -1,5 +1,5 @@
 //! [INPUT]: 工程配置、视频解码、预览渲染和音频输出。
-//! [OUTPUT]: 实时播放，支持配音时钟与回看。
+//! [OUTPUT]: 实时播放和同步配音时钟。
 //! [POS]: 编辑器预览传输引擎。
 //! [PROTOCOL]: Update this header on change, then check AGENTS.md
 
@@ -350,12 +350,6 @@ pub struct VoiceoverPreview {
     pub stop: Arc<dyn Fn(Instant) + Send + Sync>,
     pub frame_offset: Duration,
     pub duration: Duration,
-}
-
-#[derive(Clone)]
-pub enum PreviewPlayback {
-    Voiceover(VoiceoverPreview),
-    Review(Arc<ProjectConfiguration>),
 }
 
 pub struct Playback {

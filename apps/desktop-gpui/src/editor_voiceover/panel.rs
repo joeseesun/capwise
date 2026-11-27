@@ -1,5 +1,5 @@
 //! [INPUT]: 配音状态、输入电平和编辑器主题。
-//! [OUTPUT]: 工程侧栏配音控件和画面倒数。
+//! [OUTPUT]: 配音控件和画面倒数。
 //! [POS]: 配音交互的渲染层。
 //! [PROTOCOL]: Update this header on change, then check AGENTS.md
 
@@ -42,7 +42,6 @@ impl EditorWindow {
         let setup = matches!(panel.phase, Phase::Idle | Phase::Error);
         let recording = matches!(panel.phase, Phase::Recording | Phase::Paused);
         let ready = panel.phase == Phase::Ready;
-        let attached = panel.phase == Phase::Attached;
         let has_sample = panel
             .status
             .as_ref()
@@ -58,8 +57,7 @@ impl EditorWindow {
             Phase::Paused => tr::editor::voiceover::paused(),
             Phase::Finalizing | Phase::SourceFinalizing => tr::editor::voiceover::saving(),
             Phase::Recovering => tr::editor::voiceover::recovering(),
-            Phase::Ready => tr::editor::voiceover::review_title(),
-            Phase::Attached => tr::editor::voiceover::added(),
+            Phase::Ready => tr::editor::voiceover::saving(),
             Phase::Error => tr::editor::voiceover::stopped(),
         };
         let takes = panel
@@ -78,7 +76,11 @@ impl EditorWindow {
         );
         let mut content = div()
             .id("voiceover-panel")
-            .size_full()
+            .w_full()
+            .max_h(gpui::relative(0.63))
+            .flex_none()
+            .rounded(px(12.))
+            .bg(Hsla::from(theme.editor.card))
             .overflow_y_scroll()
             .flex()
             .flex_col()
@@ -175,7 +177,7 @@ impl EditorWindow {
             } else {
                 clock(start)
             });
-        if panel.follow_picture && !ready && !attached {
+        if panel.follow_picture && !ready {
             timing = timing.child(div().child(tr::editor::voiceover::muted_picture()));
         }
         content = content.child(timing);
@@ -277,40 +279,11 @@ impl EditorWindow {
                     ),
             );
         }
-        if ready
-            && panel
-                .ready
-                .as_ref()
-                .and_then(|take| take.audio().suggested_gain_db())
-                .is_some()
-        {
-            content = content.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(8.))
-                    .text_size(px(13.))
-                    .child(tr::editor::voiceover::normalize())
-                    .child(
-                        ui::Toggle::plain(&theme, "voiceover-normalize", panel.normalize).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.stop_playback(cx);
-                                this.library_audition = None;
-                                if let Some(panel) = this.voiceover.panel.as_mut() {
-                                    panel.normalize = !panel.normalize;
-                                }
-                                cx.notify();
-                            }),
-                        ),
-                    ),
-            );
-        }
         if let Some(error) = &panel.error {
             content = content.child(
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.red_9))
+                    .text_color(Hsla::from(theme.red_11))
                     .child(error.clone()),
             );
         }
@@ -385,64 +358,14 @@ impl EditorWindow {
                             })),
                     ),
             );
-        } else if ready || attached {
-            let picture = panel.follow_picture || panel.replacement.is_some() || attached;
-            let auditioning = self
-                .library_audition
-                .as_ref()
-                .is_some_and(|audition| audition.id == "voiceover-take");
-            let playing = self.playing || auditioning;
+        } else if ready {
             content = content.child(
-                div()
-                    .flex()
-                    .gap(px(8.))
-                    .child(
-                        ui::EditorButton::plain(&theme, "voiceover-review")
-                            .grow()
-                            .height(px(34.))
-                            .left_icon(if playing {
-                                "icons/pause.svg"
-                            } else {
-                                "icons/play.svg"
-                            })
-                            .label(if playing {
-                                tr::editor::voiceover::stop_playback()
-                            } else if picture {
-                                tr::editor::voiceover::play_picture()
-                            } else {
-                                tr::editor::voiceover::audition_take()
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.play_voiceover_take(cx))),
-                    )
-                    .when(ready, |row| {
-                        row.child(
-                            ui::EditorButton::plain(&theme, "voiceover-retake")
-                                .grow()
-                                .height(px(34.))
-                                .left_icon("icons/rotate-ccw.svg")
-                                .label(tr::editor::voiceover::retake())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.retake_voiceover(window, cx)
-                                })),
-                        )
-                    }),
+                ui::EditorButton::plain(&theme, "voiceover-retry-save")
+                    .filled(&theme)
+                    .height(px(38.))
+                    .label(tr::editor::voiceover::retry_save())
+                    .on_click(cx.listener(|this, _, window, cx| this.attach_voiceover(window, cx))),
             );
-            if ready {
-                content = content.child(
-                    ui::EditorButton::plain(&theme, "voiceover-attach")
-                        .filled(&theme)
-                        .height(px(38.))
-                        .left_icon("icons/check.svg")
-                        .label(if panel.replacement.is_some() {
-                            tr::editor::voiceover::replace_take()
-                        } else {
-                            tr::editor::voiceover::add_to_timeline()
-                        })
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.attach_voiceover(window, cx)),
-                        ),
-                );
-            }
         }
         if !takes.is_empty() && !busy {
             content = content.child(

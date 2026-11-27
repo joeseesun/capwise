@@ -35,7 +35,7 @@ fn voiceover_finalization_and_recovery_keep_the_project_locked() {
     ] {
         assert!(phase.busy());
     }
-    for phase in [Phase::Idle, Phase::Ready, Phase::Attached, Phase::Error] {
+    for phase in [Phase::Idle, Phase::Ready, Phase::Error] {
         assert!(!phase.busy());
     }
 }

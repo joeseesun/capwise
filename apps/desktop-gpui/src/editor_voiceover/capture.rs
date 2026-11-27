@@ -1,5 +1,5 @@
 //! [INPUT]: 配音会话、播放器和录制状态。
-//! [OUTPUT]: 同步开始、暂停、停止及回看。
+//! [OUTPUT]: 开始、暂停、停止和录音保存。
 //! [POS]: 配音侧栏与媒体引擎的协调层。
 //! [PROTOCOL]: Update this header on change, then check AGENTS.md
 
@@ -8,7 +8,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cap_editor::PreviewPlayback;
 use gpui::{AsyncWindowContext, Context, Window};
 use tokio::sync::{Mutex, watch};
 use uuid::Uuid;
@@ -22,9 +21,7 @@ use crate::{
     },
 };
 
-use super::{
-    Phase, Placement, StatusAction, Ticket, frame_floor, observe_recording_phase, review_project,
-};
+use super::{Phase, Placement, StatusAction, Ticket, frame_floor, observe_recording_phase};
 
 impl EditorWindow {
     pub(super) fn start_voiceover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -279,7 +276,7 @@ impl EditorWindow {
             Duration::from_secs_f64((at - frame_time).max(0.0)),
             Duration::from_secs_f64((end - at).max(0.0)),
         );
-        self.play_voiceover_preview(frame_time, PreviewPlayback::Voiceover(preview), None, cx)
+        self.play_voiceover_preview(frame_time, preview, cx)
     }
 
     pub(crate) fn voiceover_playback_ended(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -306,82 +303,31 @@ impl EditorWindow {
         }
     }
 
-    pub(crate) fn voiceover_play_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn voiceover_play_action(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match self.voiceover.panel.as_ref().map(|panel| panel.phase) {
+            Some(Phase::Recording | Phase::Paused) => self.pause_voiceover(window, cx),
+            Some(phase) if phase.busy() => {}
+            _ => return false,
+        }
+        true
+    }
+
+    pub(crate) fn voiceover_record_key(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match self.voiceover.panel.as_ref().map(|panel| panel.phase) {
             Some(Phase::Idle | Phase::Error) => self.start_voiceover(window, cx),
-            Some(Phase::Recording | Phase::Paused) => self.pause_voiceover(window, cx),
-            Some(Phase::Ready | Phase::Attached) => self.play_voiceover_take(cx),
-            _ => {}
+            Some(Phase::Recording | Phase::Paused) => self.finish_voiceover(false, window, cx),
+            Some(phase) if phase.busy() => {}
+            _ => return false,
         }
-    }
-
-    pub(super) fn play_voiceover_take(&mut self, cx: &mut Context<Self>) {
-        let Some(panel) = &self.voiceover.panel else {
-            return;
-        };
-        if panel.follow_picture || panel.replacement.is_some() || panel.phase == Phase::Attached {
-            self.review_voiceover(cx);
-        } else if let Some(take) = &panel.ready {
-            self.toggle_audio_audition_with_gain(
-                "voiceover-take",
-                take.path(),
-                panel.gain(take),
-                cx,
-            );
-        }
-    }
-
-    fn review_voiceover(&mut self, cx: &mut Context<Self>) {
-        if self.playing {
-            self.stop_playback(cx);
-            return;
-        }
-        self.library_audition = None;
-        let Some(panel) = self.voiceover.panel.as_ref() else {
-            return;
-        };
-        let Some(take) = panel.ready.as_ref() else {
-            return;
-        };
-        let replacement = panel
-            .replacement
-            .as_ref()
-            .map(|segment| segment.path.as_str());
-        let Some((project, range)) = review_project(
-            &self.project,
-            take,
-            replacement,
-            panel.placement.lane,
-            panel.gain(take),
-        ) else {
-            return;
-        };
-        if !self.play_voiceover_preview(
-            range.start,
-            PreviewPlayback::Review(Arc::new(project)),
-            Some(range.end),
-            cx,
-        ) {
-            if let Some(panel) = self.voiceover.panel.as_mut() {
-                panel.error = Some(tr::editor::voiceover::picture_stopped().into());
-            }
-            cx.notify();
-        }
-    }
-
-    pub(super) fn retake_voiceover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.stop_playback(cx);
-        self.library_audition = None;
-        let Some(panel) = self.voiceover.panel.as_mut() else {
-            return;
-        };
-        if panel.phase != Phase::Ready {
-            return;
-        }
-        panel.ready = None;
-        panel.phase = Phase::Idle;
-        panel.error = None;
-        self.start_voiceover(window, cx);
+        true
     }
 
     pub(super) fn pause_voiceover(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -53,7 +53,7 @@ use std::{
 };
 
 use cap_cursor_info::CursorFamily;
-use cap_editor::{EditorFrameOutput, EditorInstance, EditorState, PreviewPlayback};
+use cap_editor::{EditorFrameOutput, EditorInstance, EditorState, VoiceoverPreview};
 use cap_project::caption_words::caption_text_from_words;
 use cap_project::{
     ClipSpeedAudioMode, Cursors, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
@@ -1105,7 +1105,7 @@ impl Default for Desired {
 #[derive(Default)]
 struct TransportState {
     desired: Desired,
-    preview: Option<PreviewPlayback>,
+    preview: Option<VoiceoverPreview>,
 }
 
 #[derive(Clone)]
@@ -1171,7 +1171,7 @@ impl TransportHandle {
         self.play_from_with_preview(frame, None);
     }
 
-    fn play_from_with_preview(&self, frame: u32, preview: Option<PreviewPlayback>) {
+    fn play_from_with_preview(&self, frame: u32, preview: Option<VoiceoverPreview>) {
         self.modify(|state| {
             state.desired.playing = true;
             state.desired.seek = Some(frame);
@@ -4027,11 +4027,7 @@ impl EditorWindow {
         // press restart from 0.
         // `Play shot` stops itself at the shot's own end, the way the
         // end-of-media effect stops at the timeline's.
-        let end_tolerance = if self.voiceover.is_open() {
-            0.0
-        } else {
-            1.0 / f64::from(EDITOR_PREVIEW_FPS)
-        };
+        let end_tolerance = 1.0 / f64::from(EDITOR_PREVIEW_FPS);
         if self.playing
             && let Some(until) = self.play_until
             && next >= until - end_tolerance
@@ -4040,7 +4036,7 @@ impl EditorWindow {
             self.caption_audition_ended(cx);
         }
 
-        if self.playing && self.is_at_end() && !self.voiceover.is_open() {
+        if self.playing && self.is_at_end() && !self.voiceover.is_busy() {
             self.stop_playback(cx);
         }
 
@@ -4110,8 +4106,7 @@ impl EditorWindow {
     pub(crate) fn play_voiceover_preview(
         &mut self,
         from: f64,
-        preview: PreviewPlayback,
-        until: Option<f64>,
+        preview: VoiceoverPreview,
         cx: &mut Context<Self>,
     ) -> bool {
         if self.transport.is_none()
@@ -4121,7 +4116,6 @@ impl EditorWindow {
             return false;
         }
         self.start_playback_at(from, Some(preview), cx);
-        self.play_until = until;
         true
     }
 
@@ -4155,7 +4149,7 @@ impl EditorWindow {
     fn start_playback_at(
         &mut self,
         from: f64,
-        preview: Option<PreviewPlayback>,
+        preview: Option<VoiceoverPreview>,
         cx: &mut Context<Self>,
     ) {
         self.audio_library.online.cancel_preview();
@@ -4270,8 +4264,7 @@ impl EditorWindow {
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
     pub fn toggle_play(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.voiceover.is_open() {
-            self.voiceover_play_action(window, cx);
+        if self.voiceover_play_action(window, cx) {
             return;
         }
         self.clear_redaction_tool();
@@ -4325,6 +4318,7 @@ impl EditorWindow {
         let mode_changed = self.caption_seek_preview != caption_preview;
         self.caption_seek_preview = caption_preview;
         if self.apply_seek(time) {
+            self.voiceover.seek_changed(self.playhead);
             if mode_changed {
                 self.publish_project();
             }
@@ -4624,8 +4618,9 @@ impl EditorWindow {
                 && is_playback_shortcut(&event.keystroke, false, false)
                 && !event.is_held
             {
-                self.voiceover_play_action(window, cx);
-                cx.stop_propagation();
+                if self.voiceover_record_key(window, cx) {
+                    cx.stop_propagation();
+                }
             }
             return;
         }
@@ -4708,11 +4703,12 @@ impl EditorWindow {
             cx.stop_propagation();
             return;
         }
-        if self.voiceover.is_open() {
-            if event.keystroke.key == "escape" && !event.is_held {
-                self.close_voiceover(window, cx);
-                cx.stop_propagation();
-            }
+        if self.voiceover.is_open() && event.keystroke.key == "escape" && !event.is_held {
+            self.close_voiceover(window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if self.voiceover.is_busy() {
             return;
         }
         if self.export.is_some() {
@@ -5386,7 +5382,7 @@ impl EditorWindow {
     /// while paused, the pointer's time becomes `previewTime`; outside the
     /// content column, and at all times while playing, it is cleared.
     pub(crate) fn timeline_hover(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
-        if self.voiceover.is_open() {
+        if self.voiceover.is_busy() {
             return;
         }
         // `if (editorState.playing) return;` -- the handler bails *before* it
@@ -5483,7 +5479,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.voiceover.is_open() || event.button != MouseButton::Left || self.transport.is_none()
+        if self.voiceover.is_busy() || event.button != MouseButton::Left || self.transport.is_none()
         {
             return;
         }
@@ -5506,7 +5502,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.voiceover.is_open() {
+        if self.voiceover.is_busy() {
             return;
         }
         if self.scrub != Some(Scrub::Ruler) {
@@ -5801,6 +5797,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.voiceover.is_busy() {
+            return;
+        }
         if event.button != MouseButton::Left || self.transport.is_none() {
             return;
         }
@@ -12836,13 +12835,13 @@ impl EditorWindow {
                 .absolute()
                 .inset_0(),
             )
-            .children((!self.voiceover.is_open()).then(|| {
+            .child(
                 self.toolbar.clone().cached(
                     StyleRefinement::default()
                         .w_full()
                         .h(px(PLAYER_TOOLBAR_HEIGHT)),
-                )
-            }))
+                ),
+            )
             .child(self.render_preview_canvas(cx))
             .child(
                 self.transport_controls
@@ -13193,12 +13192,12 @@ impl EditorWindow {
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
-            .children(if self.project_ready() && !self.voiceover.is_open() {
+            .children(if self.project_ready() {
                 self.render_canvas_overlay(cx)
             } else {
                 None
             })
-            .children(if self.project_ready() && !self.voiceover.is_open() {
+            .children(if self.project_ready() {
                 self.render_caption_edit(cx)
             } else {
                 None
@@ -13324,20 +13323,6 @@ impl EditorWindow {
     fn render_transport(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = self.theme;
         let editor = theme.editor;
-        if self.voiceover.is_open() {
-            return div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(8.))
-                .px(px(14.))
-                .text_size(px(13.))
-                .text_color(Hsla::from(editor.text_2))
-                .child(timeline::format_time(self.playhead.max(0.0)))
-                .child(timeline::format_time(self.total_duration()))
-                .into_any_element();
-        }
         let player_width = self.player_width(f32::from(window.viewport_size().width));
         let compact = player_width < 760.;
         let narrow = player_width < 620.;
@@ -13355,6 +13340,7 @@ impl EditorWindow {
             "icons/pause.svg"
         };
 
+        let can_seek = live && !self.voiceover.is_busy();
         let skip = |id: &'static str, glyph: &'static str, handler: ui::ClickHandler| {
             div()
                 .id(id)
@@ -13363,7 +13349,7 @@ impl EditorWindow {
                 .items_center()
                 .justify_center()
                 .size(px(24.))
-                .when(live, |this| {
+                .when(can_seek, |this| {
                     this.cursor_pointer().hover(|style| style.opacity(0.7))
                 })
                 .child(
@@ -13372,7 +13358,8 @@ impl EditorWindow {
                         .size(px(14.))
                         .text_color(Hsla::from(editor.text_2)),
                 )
-                .on_click(handler)
+                .when(can_seek, |this| this.on_click(handler))
+                .when(!can_seek, |this| this.opacity(0.5))
         };
 
         div()
@@ -13520,7 +13507,7 @@ impl EditorWindow {
                                     tr::editor::window::transport::split()
                                 })
                                 .radius(px(7.))
-                                .disabled(!self.project_ready())
+                                .disabled(!self.project_ready() || self.voiceover.is_busy())
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
                                         this.toggle_split_mode(cx);
@@ -13573,7 +13560,7 @@ impl EditorWindow {
     fn render_video_speed(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let enabled = self.visual_ready();
+        let enabled = self.visual_ready() && !self.voiceover.is_busy();
         let open = self
             .toolbar_menu
             .as_ref()
@@ -13937,10 +13924,35 @@ impl EditorWindow {
                 .summary()
                 .is_some_and(|summary| summary.has_cursor_data)
             && self.transport.is_some();
-        for row in &model.rows {
+        let voiceover = self.voiceover.waveform();
+        let mut virtual_rows = None;
+        if let Some(take) = &voiceover
+            && !model
+                .rows
+                .iter()
+                .any(|row| row.kind == TrackKind::Audio && row.lane == take.lane)
+        {
+            let mut rows = model.rows.clone();
+            let index = rows
+                .iter()
+                .rposition(|row| row.kind == TrackKind::Audio)
+                .map_or(rows.len(), |index| index + 1);
+            rows.insert(
+                index,
+                timeline::TrackRow {
+                    kind: TrackKind::Audio,
+                    lane: take.lane,
+                },
+            );
+            virtual_rows = Some(rows);
+        }
+        for row in virtual_rows.as_deref().unwrap_or(&model.rows) {
             let kind = row.kind;
             let lane = row.lane;
             let track_row = *row;
+            let take = voiceover
+                .as_ref()
+                .filter(|take| kind == TrackKind::Audio && take.lane == lane);
             let overlay = kind.overlay_track(lane).is_some();
             let can_reorder = Self::lane_reorderable(kind)
                 && model
@@ -14084,7 +14096,10 @@ impl EditorWindow {
                         timeline::render_row(&theme, model, *row, self.view, viewport_width, ui),
                     ))
                     .children(
-                        (kind == TrackKind::Audio && !model.row_has_segments(*row)).then(|| {
+                        (kind == TrackKind::Audio
+                            && take.is_none()
+                            && !model.row_has_segments(*row))
+                        .then(|| {
                             div()
                                 .absolute()
                                 .left(px(timeline::TRACK_GUTTER))
@@ -14153,6 +14168,15 @@ impl EditorWindow {
                                 )
                         }),
                     )
+                    .children(take.and_then(|take| {
+                        timeline::render_live_voiceover(
+                            &theme,
+                            model,
+                            take,
+                            self.view,
+                            viewport_width,
+                        )
+                    }))
                     .when(reorder_source, |this| this.opacity(0.45))
                     .children((toggleable && (row_hovered || row_hidden)).then(|| {
                         let audio = kind == TrackKind::Audio;
@@ -15114,20 +15138,14 @@ impl Render for EditorWindow {
                                         div()
                                             .flex()
                                             .flex_col()
-                                            .when(
-                                                !self.transcript.open || self.voiceover.is_open(),
-                                                |card| card.flex_1(),
-                                            )
-                                            .when(
-                                                self.transcript.open && !self.voiceover.is_open(),
-                                                |card| {
-                                                    card.flex_none().w(px(transcript_row_width(
-                                                        viewport_width,
-                                                    ) * self
-                                                        .transcript
-                                                        .player_share))
-                                                },
-                                            )
+                                            .when(!self.transcript.open, |card| card.flex_1())
+                                            .when(self.transcript.open, |card| {
+                                                card.flex_none().w(px(transcript_row_width(
+                                                    viewport_width,
+                                                ) * self
+                                                    .transcript
+                                                    .player_share))
+                                            })
                                             .min_w_0()
                                             .min_h_0()
                                             .rounded(px(12.))
@@ -15141,47 +15159,41 @@ impl Render for EditorWindow {
                                     // The 8px gutter is the wrapper's, not the
                                     // sidebar view's: a margin inside a cached
                                     // element is not honoured.
-                                    .when_some(self.render_voiceover(cx), |row, panel| {
+                                    .when(!self.transcript.open, |row| {
                                         row.child(
-                                            div().flex_none().h_full().pl(px(8.)).child(
-                                                div()
-                                                    .w(px(SIDEBAR_WIDTH))
-                                                    .h_full()
-                                                    .rounded(px(12.))
-                                                    .border_1()
-                                                    .border_color(self.card_line())
-                                                    .bg(self.panel_bg())
-                                                    .overflow_hidden()
-                                                    .child(panel),
-                                            ),
+                                            div()
+                                                .flex_none()
+                                                .w(px(SIDEBAR_WIDTH + 8.))
+                                                .h_full()
+                                                .pl(px(8.))
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(8.))
+                                                .children(self.render_voiceover(cx))
+                                                .child(div().flex_1().min_h_0().w_full().child(
+                                                    self.sidebar_view.clone().cached(
+                                                        StyleRefinement::default().size_full(),
+                                                    ),
+                                                )),
                                         )
                                     })
-                                    .when(
-                                        !self.transcript.open && !self.voiceover.is_open(),
-                                        |row| {
-                                            row.child(
-                                                div().flex_none().h_full().pl(px(8.)).child(
-                                                    self.sidebar_view.clone().cached(
-                                                        StyleRefinement::default()
-                                                            .w(px(SIDEBAR_WIDTH))
-                                                            .h_full(),
-                                                    ),
-                                                ),
-                                            )
-                                        },
-                                    )
-                                    .when(
-                                        self.transcript.open && !self.voiceover.is_open(),
-                                        |row| {
-                                            row.child(self.render_transcript_grip(cx)).child(
-                                                div().flex_1().min_w_0().h_full().child(
+                                    .when(self.transcript.open, |row| {
+                                        row.child(self.render_transcript_grip(cx)).child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .h_full()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(8.))
+                                                .children(self.render_voiceover(cx))
+                                                .child(div().flex_1().min_h_0().w_full().child(
                                                     self.transcript_view.clone().cached(
                                                         StyleRefinement::default().size_full(),
                                                     ),
-                                                ),
-                                            )
-                                        },
-                                    ),
+                                                )),
+                                        )
+                                    }),
                             )
                             // The timeline card: the wrapper is owned here so
                             // `render_timeline` keeps laying out inside a plain
@@ -15202,15 +15214,9 @@ impl Render for EditorWindow {
                                             .bg(self.panel_bg())
                                             .shadow(theme.editor.card_shadow())
                                             .overflow_hidden()
-                                            .relative()
                                             .child(self.timeline_view.clone().cached(
                                                 StyleRefinement::default().w_full().h_full(),
-                                            ))
-                                            .children(
-                                                self.voiceover
-                                                    .is_open()
-                                                    .then(|| div().absolute().inset_0().occlude()),
-                                            ),
+                                            )),
                                     )
                                     // The grip rides the gap between the two
                                     // cards rather than taking a strip of the

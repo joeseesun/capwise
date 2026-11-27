@@ -1,5 +1,5 @@
 //! [INPUT]: 编辑器时间线、麦克风输入、配音素材。
-//! [OUTPUT]: 配音侧栏、跟随画面录制、回看和确认。
+//! [OUTPUT]: 配音控件、同步录音和自动落轨。
 //! [POS]: 协调预览时钟与可恢复配音素材。
 //! [PROTOCOL]: Update this header on change, then check AGENTS.md
 
@@ -20,7 +20,6 @@ use uuid::Uuid;
 
 use crate::{
     editor_audio::{record_audio_asset, replace_audio_asset},
-    editor_edits::default_audio_segment,
     editor_window::{EDITOR_PREVIEW_FPS, EditorWindow},
     feeds::Feeds,
     i18n::tr,
@@ -44,7 +43,6 @@ enum Phase {
     SourceFinalizing,
     Recovering,
     Ready,
-    Attached,
     Error,
 }
 
@@ -168,7 +166,6 @@ struct Panel {
     device_menu: bool,
     meter: Entity<ui::MicrophoneLevel>,
     _microphone_preview: Entity<MicrophonePreview>,
-    normalize: bool,
     session: Option<Session>,
     take_id: Option<Uuid>,
     startup_cancel: Option<watch::Sender<bool>>,
@@ -195,6 +192,36 @@ impl VoiceoverUi {
     pub(crate) fn is_busy(&self) -> bool {
         self.panel.as_ref().is_some_and(|panel| panel.phase.busy())
     }
+
+    pub(crate) fn seek_changed(&mut self, time: f64) {
+        if let Some(panel) = self.panel.as_mut()
+            && matches!(panel.phase, Phase::Idle | Phase::Error)
+            && panel.replacement.is_none()
+        {
+            panel.origin = time;
+        }
+    }
+
+    pub(crate) fn waveform(&self) -> Option<crate::editor_timeline::LiveVoiceover> {
+        let panel = self.panel.as_ref()?;
+        if !matches!(
+            panel.phase,
+            Phase::Recording | Phase::Paused | Phase::Finalizing | Phase::SourceFinalizing
+        ) {
+            return None;
+        }
+        let status = panel.status.as_ref()?;
+        if status.peaks.is_empty() {
+            return None;
+        }
+        Some(crate::editor_timeline::LiveVoiceover {
+            start: panel.placement.start,
+            end: panel.placement.start + status.duration_estimate.as_secs_f64(),
+            lane: panel.placement.lane,
+            peaks: status.peaks.clone(),
+            paused: panel.phase == Phase::Paused,
+        })
+    }
 }
 
 impl Panel {
@@ -207,67 +234,11 @@ impl Panel {
             .unwrap_or(self.origin..total);
         bounds.start..bounds.end.min(total)
     }
-
-    fn gain(&self, take: &ReadyTake) -> f32 {
-        if self.normalize
-            && let Some(gain) = take.audio().suggested_gain_db()
-        {
-            return gain;
-        }
-        self.replacement
-            .as_ref()
-            .map_or(0.0, |segment| segment.volume_db)
-    }
 }
 
 fn frame_floor(time: f64) -> f64 {
     let fps = f64::from(EDITOR_PREVIEW_FPS);
     (time * fps + 1e-7).floor() / fps
-}
-
-fn review_project(
-    project: &cap_project::ProjectConfiguration,
-    take: &ReadyTake,
-    path: Option<&str>,
-    lane: u32,
-    gain: f32,
-) -> Option<(cap_project::ProjectConfiguration, Range<f64>)> {
-    let mut project = project.clone();
-    let timeline = project.timeline.as_mut()?;
-    let mut range =
-        take.manifest().output_start..(take.manifest().output_start + take.audio().duration);
-    let new_path = take.relative_path();
-    if let Some(index) = timeline
-        .audio_segments
-        .iter()
-        .position(|segment| Some(segment.path.as_str()) == path || segment.path == new_path)
-    {
-        if timeline.audio_segments[index].path != new_path {
-            replace_audio_asset(
-                timeline,
-                index,
-                new_path,
-                String::new(),
-                take.audio().duration,
-            );
-        }
-        let segment = &mut timeline.audio_segments[index];
-        segment.volume_db = gain;
-        segment.enabled = true;
-        range = segment.start..segment.end;
-    } else {
-        let mut segment = default_audio_segment(
-            range.start,
-            range.end,
-            lane,
-            new_path,
-            String::new(),
-            Some(take.audio().duration),
-        );
-        segment.volume_db = gain;
-        timeline.audio_segments.push(segment);
-    }
-    Some((project, range))
 }
 
 impl EditorWindow {
@@ -406,7 +377,6 @@ impl EditorWindow {
             device_menu: false,
             meter,
             _microphone_preview: preview,
-            normalize: false,
             session: None,
             take_id: None,
             startup_cancel: None,
@@ -465,7 +435,9 @@ impl EditorWindow {
             return;
         };
         let replacement = panel.replacement.clone();
-        let gain = panel.gain(&take);
+        let gain = replacement
+            .as_ref()
+            .map_or(0.0, |segment| segment.volume_db);
         self.stop_playback(cx);
         self.library_audition = None;
         let Some((mut lane, mut range)) = audio_destination(
@@ -546,18 +518,19 @@ impl EditorWindow {
             take.mark_attached().map_err(|error| format!("{error:#}"))
         })();
         let (start, end) = (range.start, range.end);
-        let panel = self.voiceover.panel.as_mut().unwrap();
-        panel.ready = Some(take);
         match result {
             Ok(()) => {
-                panel.phase = Phase::Attached;
-                panel.placement = Placement { start, lane };
-                panel.error = None;
-                self.seek_to_time(start, cx);
+                self.voiceover.panel = None;
                 self.reveal_timeline_range(start, end, cx);
                 self.reveal_timeline_row(crate::editor_timeline::TrackKind::Audio, lane, cx);
+                self.show_notice(tr::editor::voiceover::added(), window, cx);
+                self.focus_root(window, cx);
             }
-            Err(error) => panel.error = Some(error),
+            Err(error) => {
+                let panel = self.voiceover.panel.as_mut().unwrap();
+                panel.ready = Some(take);
+                panel.error = Some(error);
+            }
         }
         cx.notify();
     }
@@ -601,7 +574,6 @@ impl EditorWindow {
         if panel.phase.busy() {
             return;
         }
-        let previous_phase = panel.phase;
         self.stop_playback(cx);
         self.library_audition = None;
         self.voiceover.generation = self.voiceover.generation.wrapping_add(1);
@@ -640,14 +612,11 @@ impl EditorWindow {
                         panel.placement = Placement { start, lane };
                         panel.ready = Some(take);
                         panel.phase = Phase::Ready;
+                        this.attach_voiceover(window, cx);
                     }
                     Err(error) => {
                         panel.error = Some(error);
-                        panel.phase = if panel.ready.is_some() {
-                            previous_phase
-                        } else {
-                            Phase::Error
-                        };
+                        panel.phase = Phase::Error;
                     }
                 }
                 this.reload_voiceover_takes(window, cx);

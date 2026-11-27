@@ -453,17 +453,23 @@ async fn voiceover_picture_clock_excludes_countdown_and_paused_samples() {
     });
     tokio::time::sleep(Duration::from_millis(350)).await;
     assert!(!session.status().first_sample_seen);
+    assert!(session.status().peaks.is_empty());
     let first = capture.preview(Duration::ZERO, Duration::from_secs(10));
     let start = (first.start)().unwrap();
     tokio::time::sleep(Duration::from_millis(250)).await;
     let paused = capture.hold(None, Instant::now());
     assert!(paused >= Duration::from_millis(240));
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let frozen_peaks = session.status().peaks;
+    assert!(frozen_peaks.iter().any(|db| *db > -20.0));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(Arc::ptr_eq(&frozen_peaks, &session.status().peaks));
     assert_eq!(capture.elapsed(Instant::now()), paused);
     let second = capture.preview(Duration::ZERO, Duration::from_secs(10));
     let resume = (second.start)().unwrap();
     (first.stop)(start + Duration::from_millis(250));
     tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(session.status().peaks.len() > frozen_peaks.len());
     let ended_at = Instant::now();
     (second.stop)(ended_at);
     let expected = paused + ended_at.saturating_duration_since(resume);
@@ -545,6 +551,7 @@ fn finalizing_session(
         state: TakeState::Finalizing,
         duration_estimate: Duration::from_secs_f64(ready.audio().duration),
         first_sample_seen: true,
+        peaks: Arc::default(),
         health: Vec::new(),
         error: None,
     });

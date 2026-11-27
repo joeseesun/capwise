@@ -1,11 +1,11 @@
 //! [INPUT]: 工程状态、渲染数据和音频素材。
-//! [OUTPUT]: 编辑实例及临时配音预览。
+//! [OUTPUT]: 编辑实例和同步配音预览。
 //! [POS]: 为播放器提供工程快照和媒体缓存。
 //! [PROTOCOL]: Update this header on change, then check AGENTS.md
 
 use crate::completed_audio::{CompletedAudioHandoff, CompletedAudioSegment};
 use crate::editor;
-use crate::playback::{self, PlaybackHandle, PlaybackStartError, PreviewPlayback};
+use crate::playback::{self, PlaybackHandle, PlaybackStartError, VoiceoverPreview};
 use cap_project::StudioRecordingMeta;
 use cap_project::{
     CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
@@ -951,7 +951,7 @@ impl EditorInstance {
         fps: u32,
         resolution: XY<u32>,
         frame: u32,
-        preview: PreviewPlayback,
+        preview: VoiceoverPreview,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
         self.finish_preparing_playback().await?;
         self.start_playback_internal(fps, resolution, Some(frame), None, Some(preview))
@@ -987,26 +987,14 @@ impl EditorInstance {
         resolution_base: XY<u32>,
         start_frame_number: Option<u32>,
         adoption: Option<crate::PreparingPlaybackAdoption>,
-        preview: Option<PreviewPlayback>,
+        voiceover: Option<VoiceoverPreview>,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
-        let fixed_speed = preview.is_some();
-        let (music, project, voiceover) = match preview {
-            Some(PreviewPlayback::Voiceover(voiceover)) => (
-                Default::default(),
-                self.project_config.0.subscribe(),
-                Some(voiceover),
-            ),
-            Some(PreviewPlayback::Review(project)) => {
-                let music = self.load_music_tracks_for((*project).clone()).await;
-                (music, watch::channel((*project).clone()).1, None)
-            }
-            None => (
-                self.load_music_tracks().await,
-                self.project_config.0.subscribe(),
-                None,
-            ),
+        let fixed_speed = voiceover.is_some();
+        let music = if fixed_speed {
+            Default::default()
+        } else {
+            self.load_music_tracks().await
         };
-
         let (mut handle, prev, epoch) = {
             let mut state = self.state.lock().await;
 
@@ -1032,7 +1020,7 @@ impl EditorInstance {
                 renderer: self.renderer.clone(),
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
-                project,
+                project: self.project_config.0.subscribe(),
                 audio_output: self.audio_output.clone(),
                 telemetry: None,
                 preview_speed: if fixed_speed {

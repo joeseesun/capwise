@@ -1,3 +1,8 @@
+//! [INPUT]: 工程片段、视口和录音采样峰值。
+//! [OUTPUT]: 时间线轨道与已保存、正在录制的波形。
+//! [POS]: 用相同的时间缩放绘制常规片段和配音临时片段。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 //! The editor timeline -- `routes/editor/Timeline/` at 1:1, read-only.
 //!
 //! E1 drew two locked tracks and a playhead; E2 made the playhead live. This
@@ -859,6 +864,7 @@ pub enum WaveformTrack {
     Mic,
     System,
     Imported,
+    LiveVoiceover,
 }
 
 /// An imported audio file's 10 Hz peak table, built from the samples playback
@@ -3645,7 +3651,7 @@ fn render_waveform(
         .collect();
     waveform_canvas(
         model,
-        segment,
+        segment.start..segment.end,
         [
             (WaveformTrack::Mic, mic, mic_scale),
             (WaveformTrack::System, system, system_scale),
@@ -3691,7 +3697,7 @@ fn render_imported_waveform(
     };
     waveform_canvas(
         model,
-        segment,
+        segment.start..segment.end,
         vec![WaveformSource {
             slot: (index, WaveformTrack::Imported),
             peaks: waveform.peaks.clone(),
@@ -3707,6 +3713,87 @@ fn render_imported_waveform(
     )
 }
 
+pub(crate) struct LiveVoiceover {
+    pub start: f64,
+    pub end: f64,
+    pub lane: u32,
+    pub peaks: Arc<Vec<f32>>,
+    pub paused: bool,
+}
+
+pub(crate) fn render_live_voiceover(
+    theme: &Theme,
+    model: &TimelineModel,
+    take: &LiveVoiceover,
+    view: TimelineView,
+    viewport_width: f32,
+) -> Option<AnyElement> {
+    if take.end <= take.start
+        || take.end <= view.transform.position
+        || take.start >= view.transform.position + view.transform.zoom
+    {
+        return None;
+    }
+    let seconds_per_pixel = view.transform.secs_per_pixel(content_width(viewport_width));
+    let x = ((take.start - view.transform.position) / seconds_per_pixel) as f32;
+    let width = (((take.end - take.start) / seconds_per_pixel) as f32).max(2.0);
+    let height = model.track_height();
+    let accent = Hsla::from(theme.red_11);
+    let mut clip = div()
+        .absolute()
+        .left(px(x))
+        .top_0()
+        .w(px(width))
+        .h(px(height))
+        .rounded(px(SEGMENT_RADIUS))
+        .bg(accent.opacity(0.12))
+        .border_1()
+        .border_color(accent.opacity(0.48))
+        .overflow_hidden()
+        .child(waveform_canvas(
+            model,
+            take.start..take.end,
+            vec![WaveformSource {
+                slot: (take.lane as usize, WaveformTrack::LiveVoiceover),
+                peaks: take.peaks.clone(),
+                scale: 1.0,
+                source_start: 0.0,
+                timescale: 1.0,
+            }],
+            Vec::new(),
+            view,
+            width,
+            height,
+            accent,
+        ));
+    if width >= 68.0 {
+        clip = clip.child(
+            div()
+                .absolute()
+                .left(px((8.0 - x).max(8.0)))
+                .top(px(3.0))
+                .text_size(px(11.))
+                .text_color(accent)
+                .child(if take.paused {
+                    tr::editor::voiceover::paused()
+                } else {
+                    tr::editor::voiceover::recording()
+                }),
+        );
+    }
+    Some(
+        div()
+            .absolute()
+            .left(px(content_left()))
+            .right_0()
+            .top_0()
+            .bottom_0()
+            .overflow_hidden()
+            .child(clip)
+            .into_any_element(),
+    )
+}
+
 struct WaveformSource {
     slot: (usize, WaveformTrack),
     peaks: Arc<Vec<f32>>,
@@ -3718,7 +3805,7 @@ struct WaveformSource {
 #[allow(clippy::too_many_arguments)]
 fn waveform_canvas(
     model: &TimelineModel,
-    segment: &Segment,
+    segment: std::ops::Range<f64>,
     sources: Vec<WaveformSource>,
     holds: Vec<(f64, f64)>,
     view: TimelineView,

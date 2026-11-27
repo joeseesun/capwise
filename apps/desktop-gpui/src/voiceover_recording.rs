@@ -13,8 +13,8 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use cap_recording::{
-    AudioAnchor, OutputPipeline, OwnedAudioPipelineScope, PipelineHealthEvent, RecordingStartGate,
-    SharedWallClockPause,
+    AudioAnchor, AudioFrame, OutputPipeline, OwnedAudioPipelineScope, PipelineHealthEvent,
+    RecordingStartGate, SharedWallClockPause,
     feeds::microphone::MicrophoneFeedLock,
     ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig},
     sources::Microphone,
@@ -144,11 +144,62 @@ impl TakeManifest {
     }
 }
 
+#[derive(Default)]
+struct LiveAudioPeaks {
+    peaks_db: Vec<f32>,
+    snapshot: Arc<Vec<f32>>,
+    changed: bool,
+}
+
+impl LiveAudioPeaks {
+    fn push(&mut self, frame: &AudioFrame, offset: Duration) {
+        let rate = frame.rate();
+        if rate < 10
+            || frame.channels() != 1
+            || frame.format() != ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed)
+        {
+            return;
+        }
+        let first = (offset.as_secs_f64() * f64::from(rate)).round() as usize;
+        let per_bin = rate as usize / 10;
+        let mut remaining = frame.plane::<f32>(0);
+        let mut pos = first;
+        while !remaining.is_empty() {
+            let index = pos / per_bin;
+            let count = remaining.len().min(per_bin - pos % per_bin);
+            let (samples, rest) = remaining.split_at(count);
+            let peak = samples
+                .iter()
+                .map(|sample| sample.abs())
+                .fold(0.0, f32::max);
+            let db = 20.0 * peak.max(0.001).log10();
+            if self.peaks_db.len() <= index {
+                self.peaks_db.resize(index + 1, -60.0);
+                self.changed = true;
+            }
+            if db > self.peaks_db[index] {
+                self.peaks_db[index] = db;
+                self.changed = true;
+            }
+            remaining = rest;
+            pos += count;
+        }
+    }
+
+    fn snapshot(&mut self) -> Arc<Vec<f32>> {
+        if std::mem::take(&mut self.changed) {
+            self.snapshot = Arc::new(self.peaks_db.clone());
+        }
+        self.snapshot.clone()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct VoiceoverStatus {
     pub state: TakeState,
     pub duration_estimate: Duration,
     pub first_sample_seen: bool,
+    pub peaks: Arc<Vec<f32>>,
     pub health: Vec<PipelineHealthEvent>,
     pub error: Option<String>,
 }
@@ -288,6 +339,7 @@ impl VoiceoverSession {
             state: TakeState::Recording,
             duration_estimate: Duration::ZERO,
             first_sample_seen: false,
+            peaks: Arc::default(),
             health: Vec::new(),
             error: None,
         });
@@ -301,9 +353,17 @@ impl VoiceoverSession {
         tokio::spawn(async move {
             let epoch = Timestamps::now();
             let scope = OwnedAudioPipelineScope::default();
+            let peaks = Arc::new(Mutex::new(LiveAudioPeaks::default()));
+            let samples = peaks.clone();
             let mut builder = OutputPipeline::builder(lease.dir.join(CAPTURE))
                 .with_audio_source::<Microphone>(microphone)
-                .with_timestamps(epoch);
+                .with_timestamps(epoch)
+                .with_audio_frame_observer(move |frame, offset| {
+                    samples
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(frame, offset);
+                });
             if let Some(clock) = &sync {
                 builder = builder
                     .with_start_gate(Some(
@@ -335,7 +395,7 @@ impl VoiceoverSession {
                         manifest,
                         pipeline,
                         scope,
-                        (epoch, sync),
+                        (epoch, sync, peaks),
                         command_rx,
                         status_tx,
                     )
@@ -525,7 +585,11 @@ async fn run_session(
     mut manifest: TakeManifest,
     mut pipeline: OutputPipeline,
     scope: OwnedAudioPipelineScope,
-    (epoch, synced): (Timestamps, Option<Arc<VoiceoverClock>>),
+    (epoch, synced, peaks): (
+        Timestamps,
+        Option<Arc<VoiceoverClock>>,
+        Arc<Mutex<LiveAudioPeaks>>,
+    ),
     mut commands: mpsc::UnboundedReceiver<Command>,
     status: watch::Sender<VoiceoverStatus>,
 ) {
@@ -542,6 +606,7 @@ async fn run_session(
                 clock.observe_first(*first.borrow(), epoch);
                 status.send_modify(|value| {
                     value.first_sample_seen = clock.first.is_some();
+                    value.peaks = peaks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).snapshot();
                     let now = Instant::now();
                     value.duration_estimate = synced.as_ref().map_or_else(
                         || clock.duration(now),

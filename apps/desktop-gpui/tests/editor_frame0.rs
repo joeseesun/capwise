@@ -506,12 +506,7 @@ fn voiceover_preview_advances_silent_picture_and_ends_at_the_recording_boundary(
             duration,
         };
         instance
-            .start_preview_playback(
-                PREVIEW_FPS,
-                XY::new(640, 360),
-                PREVIEW_FPS,
-                cap_editor::PreviewPlayback::Voiceover(preview),
-            )
+            .start_preview_playback(PREVIEW_FPS, XY::new(640, 360), PREVIEW_FPS, preview)
             .await
             .unwrap();
         let (start, stop) = tokio::time::timeout(Duration::from_secs(15), async {
