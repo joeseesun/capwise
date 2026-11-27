@@ -2,7 +2,7 @@
 
 > L2 | Parent: ../../../AGENTS.md
 
-`editor_audio.rs` 复用项目素材保存流程，提供内置和在线配乐入口。
+`editor_audio.rs` 提供配乐和音频导入，在配音录制期间暂停素材试听。
 `editor_window.rs` 提供工程时间线和配音侧栏的预览通道。
 `app_windows.rs` 按播放请求标记引擎停止事件。
 `editor_voiceover.rs` 确定配音目标，停止录制后写入可撤销的音频片段。

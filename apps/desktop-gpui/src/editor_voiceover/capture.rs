@@ -227,7 +227,7 @@ impl EditorWindow {
                             return false;
                         }
                         if value.state == TakeState::Finalizing && panel.sync.is_some() {
-                            this.stop_playback(cx);
+                            this.stop_playback_now(cx);
                         }
                         let panel = this.voiceover.panel.as_mut().unwrap();
                         match action {

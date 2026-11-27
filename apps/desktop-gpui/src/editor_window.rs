@@ -4049,6 +4049,12 @@ impl EditorWindow {
     /// effect, by prev/next, and by the clips sidebar's import path
     /// (`ClipsSidebar.tsx:508-511`).
     pub(crate) fn stop_playback(&mut self, cx: &mut Context<Self>) {
+        if !self.voiceover.is_busy() {
+            self.stop_playback_now(cx);
+        }
+    }
+
+    pub(crate) fn stop_playback_now(&mut self, cx: &mut Context<Self>) {
         self.clear_caption_regeneration_audition(cx);
         self.play_until = None;
         self.playback_follow.reset();
@@ -4092,7 +4098,7 @@ impl EditorWindow {
             return;
         }
         tracing::info!("playback engine stopped on its own; resetting transport UI");
-        self.stop_playback(cx);
+        self.stop_playback_now(cx);
         self.voiceover_playback_ended(window, cx);
         window.refresh();
     }
@@ -4120,7 +4126,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn park_voiceover_preview(&mut self, time: f64, cx: &mut Context<Self>) {
-        self.stop_playback(cx);
+        self.stop_playback_now(cx);
         let fps = f64::from(EDITOR_PREVIEW_FPS);
         let last_frame = ((self.total_duration() * fps).ceil() as u32).saturating_sub(1);
         let frame = (((time * fps) + 1e-7).floor() as u32).min(last_frame);
