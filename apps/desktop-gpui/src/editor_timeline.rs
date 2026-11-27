@@ -3784,7 +3784,7 @@ pub(crate) fn render_live_voiceover(
     Some(
         div()
             .absolute()
-            .left(px(content_left()))
+            .left(px(TRACK_GUTTER))
             .right_0()
             .top_0()
             .bottom_0()

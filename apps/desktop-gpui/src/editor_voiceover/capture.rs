@@ -468,6 +468,7 @@ impl EditorWindow {
                     Ok(Some(take)) => {
                         panel.ready = Some(take);
                         panel.phase = Phase::Ready;
+                        this.attach_voiceover(window, cx);
                     }
                     Ok(None) => {
                         if panel.close_after_cancel {

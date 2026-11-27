@@ -57,7 +57,7 @@ impl EditorWindow {
             Phase::Paused => tr::editor::voiceover::paused(),
             Phase::Finalizing | Phase::SourceFinalizing => tr::editor::voiceover::saving(),
             Phase::Recovering => tr::editor::voiceover::recovering(),
-            Phase::Ready => tr::editor::voiceover::saving(),
+            Phase::Ready => tr::editor::voiceover::stopped(),
             Phase::Error => tr::editor::voiceover::stopped(),
         };
         let takes = panel
