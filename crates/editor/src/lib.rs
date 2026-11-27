@@ -1,3 +1,8 @@
+//! [INPUT]: 项目、预览引擎与源媒体。
+//! [OUTPUT]: 编辑器能力和配音预览接口。
+//! [POS]: 编辑器 crate 的公共接口。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 mod audio;
 mod audio_output;
 mod completed_audio;
@@ -42,7 +47,9 @@ pub use editor_instance::{
 pub use export_audio::{
     ExportAudioError, ExportAudioPreparation, ExportAudioRenderer, ExportAudioValidation,
 };
-pub use playback::{Playback, PlaybackEvent, PlaybackHandle, PlaybackStartError};
+pub use playback::{
+    Playback, PlaybackEvent, PlaybackHandle, PlaybackStartError, PreviewPlayback, VoiceoverPreview,
+};
 pub use preparing_editor::{PreparingEditorPhase, PreparingEditorProgress, PreparingPlaybackState};
 pub use preparing_handoff::{
     PreparingPlaybackAdoption, PreparingPlaybackHandoff, PreparingPlaybackIntent,

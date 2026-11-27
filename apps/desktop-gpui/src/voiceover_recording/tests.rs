@@ -1,3 +1,8 @@
+//! [INPUT]: 合成麦克风、临时工程和配音时钟。
+//! [OUTPUT]: 配音同步及恢复回归测试。
+//! [POS]: 验证因倒数、暂停或中断产生的时间边界。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use super::*;
 use cap_recording::feeds::microphone::synthetic::SyntheticMicrophone;
 use futures_util::FutureExt as _;
@@ -413,6 +418,68 @@ fn voiceover_symlinked_storage_is_rejected_without_touching_external_files() {
     std::os::unix::fs::symlink(outside.path(), project.path().join("content/voiceovers")).unwrap();
     assert!(TakeLease::create(request(project.path())).is_err());
     assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voiceover_picture_clock_excludes_countdown_and_paused_samples() {
+    let project = project();
+    let microphone = Arc::new(SyntheticMicrophone::spawn(
+        "Synced voiceover test",
+        48_000,
+        1,
+    ));
+    let capture = Arc::new(VoiceoverClock::default());
+    let session = VoiceoverSession::start_with_clock(
+        request(project.path()),
+        Arc::new(microphone.lock().await.unwrap()),
+        Some(capture.clone()),
+    )
+    .await
+    .unwrap();
+
+    let (end, mut ended) = watch::channel(false);
+    let samples = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_millis(10));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let buffer = (0..480)
+            .map(|sample| ((sample as f32 * std::f32::consts::TAU / 48.0).sin()) * 0.3)
+            .collect::<Vec<_>>();
+        loop {
+            tokio::select! {
+                _ = ended.changed() => return,
+                _ = tick.tick() => microphone.push(&buffer, Timestamp::Instant(Instant::now())).await,
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    assert!(!session.status().first_sample_seen);
+    let first = capture.preview(Duration::ZERO, Duration::from_secs(10));
+    let start = (first.start)().unwrap();
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let paused = capture.hold(None, Instant::now());
+    assert!(paused >= Duration::from_millis(240));
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(capture.elapsed(Instant::now()), paused);
+    let second = capture.preview(Duration::ZERO, Duration::from_secs(10));
+    let resume = (second.start)().unwrap();
+    (first.stop)(start + Duration::from_millis(250));
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let ended_at = Instant::now();
+    (second.stop)(ended_at);
+    let expected = paused + ended_at.saturating_duration_since(resume);
+    let ready = session.stop().await.unwrap();
+    end_source(end, samples).await;
+
+    assert_eq!(ready.manifest().output_start, 7.25);
+    assert_eq!(capture.elapsed(Instant::now()), expected);
+    let difference = (ready.audio().duration - expected.as_secs_f64()).abs();
+    assert!(
+        difference < 0.080,
+        "audio duration {}, expected {:?}",
+        ready.audio().duration,
+        expected
+    );
+    assert!(ready.audio().peak_db.unwrap() > -20.0);
 }
 
 #[test]

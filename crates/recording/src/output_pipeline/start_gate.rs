@@ -1,3 +1,8 @@
+//! [INPUT]: 捕获时间戳和录制起点。
+//! [OUTPUT]: 在起点丢弃或裁剪预热样本。
+//! [POS]: 为录屏和配音管线提供开始门控。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use std::{
     sync::{
         Arc, OnceLock,
@@ -26,6 +31,7 @@ pub struct RecordingStartGate(Arc<Inner>);
 struct Inner {
     armed_at: OnceLock<Timestamps>,
     created: Instant,
+    failsafe: bool,
     failsafe_logged: AtomicBool,
     video_origin_at_arm: AtomicBool,
 }
@@ -38,12 +44,25 @@ impl Default for RecordingStartGate {
 
 impl RecordingStartGate {
     pub fn new() -> Self {
+        Self::with_failsafe(true)
+    }
+
+    pub fn manual() -> Self {
+        Self::with_failsafe(false)
+    }
+
+    fn with_failsafe(failsafe: bool) -> Self {
         Self(Arc::new(Inner {
             armed_at: OnceLock::new(),
             created: Instant::now(),
+            failsafe,
             failsafe_logged: AtomicBool::new(false),
             video_origin_at_arm: AtomicBool::new(false),
         }))
+    }
+
+    pub(super) fn requires_explicit_arm(&self) -> bool {
+        !self.0.failsafe
     }
 
     /// Stamps the first admitted video frame at the arm point, so the video
@@ -105,7 +124,7 @@ impl RecordingStartGate {
         if let Some(at) = self.0.armed_at.get() {
             return Some(*at);
         }
-        if self.0.created.elapsed() < START_GATE_FAILSAFE {
+        if self.requires_explicit_arm() || self.0.created.elapsed() < START_GATE_FAILSAFE {
             return None;
         }
         let _ = self.0.armed_at.set(Timestamps::now());
@@ -231,6 +250,24 @@ mod tests {
             AudioAdmission::Drop
         );
         assert!(!gate.is_armed());
+    }
+
+    #[test]
+    fn manual_gate_stays_closed_after_the_automatic_failsafe() {
+        let mut gate = RecordingStartGate::manual();
+        Arc::get_mut(&mut gate.0).unwrap().created = Instant::now()
+            .checked_sub(START_GATE_FAILSAFE + Duration::from_secs(1))
+            .unwrap();
+        let now = Timestamps::now();
+        assert_eq!(
+            gate.admit_audio(at(now, 0), 480, 48_000),
+            AudioAdmission::Drop
+        );
+        assert!(gate.arm_at(now));
+        assert_eq!(
+            gate.admit_audio(at(now, 0), 480, 48_000),
+            AudioAdmission::Admit
+        );
     }
 
     #[test]

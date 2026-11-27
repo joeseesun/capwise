@@ -1,3 +1,8 @@
+//! [INPUT]: 编辑状态、预览帧和项目素材。
+//! [OUTPUT]: 编辑器窗口、时间线和预览传输。
+//! [POS]: 将配音侧栏接入预览和编辑历史。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 //! The editor window -- `routes/editor/` shell, project load, real rendered
 //! frames, and playback.
 //!
@@ -48,7 +53,7 @@ use std::{
 };
 
 use cap_cursor_info::CursorFamily;
-use cap_editor::{EditorFrameOutput, EditorInstance, EditorState};
+use cap_editor::{EditorFrameOutput, EditorInstance, EditorState, PreviewPlayback};
 use cap_project::caption_words::caption_text_from_words;
 use cap_project::{
     ClipSpeedAudioMode, Cursors, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
@@ -842,7 +847,7 @@ impl Render for EditorSectionView {
                 EditorSection::Toolbar => {
                     editor.render_player_toolbar(window, cx).into_any_element()
                 }
-                EditorSection::Transport => editor.render_transport(window, cx).into_any_element(),
+                EditorSection::Transport => editor.render_transport(window, cx),
                 // The Clips layout mode swaps the config sidebar's column for the
                 // clips sidebar; the config sidebar is hidden, not destroyed
                 // (`Editor.tsx:728-747`).
@@ -1097,9 +1102,15 @@ impl Default for Desired {
 
 /// The UI half. Cheap to clone, safe to call from the main thread: writing it
 /// takes an uncontended `Mutex` and a `try_send` on a one-slot channel.
+#[derive(Default)]
+struct TransportState {
+    desired: Desired,
+    preview: Option<PreviewPlayback>,
+}
+
 #[derive(Clone)]
 pub struct TransportHandle {
-    desired: Arc<Mutex<Desired>>,
+    desired: Arc<Mutex<TransportState>>,
     wake: flume::Sender<()>,
 }
 
@@ -1111,15 +1122,15 @@ pub struct TransportHandle {
 /// ordinary pause path, so `Desired` stays written by the UI alone and the
 /// driver never mutates it.
 pub struct TransportDriver {
-    desired: Arc<Mutex<Desired>>,
+    desired: Arc<Mutex<TransportState>>,
     wake: flume::Receiver<()>,
-    engine_stopped: flume::Sender<()>,
+    engine_stopped: flume::Sender<u64>,
 }
 
-pub fn transport() -> (TransportHandle, TransportDriver, flume::Receiver<()>) {
-    let desired = Arc::new(Mutex::new(Desired::default()));
+pub fn transport() -> (TransportHandle, TransportDriver, flume::Receiver<u64>) {
+    let desired = Arc::new(Mutex::new(TransportState::default()));
     let (tx, rx) = flume::bounded(1);
-    let (stopped_tx, stopped_rx) = flume::bounded(1);
+    let (stopped_tx, stopped_rx) = flume::unbounded();
     (
         TransportHandle {
             desired: desired.clone(),
@@ -1135,7 +1146,7 @@ pub fn transport() -> (TransportHandle, TransportDriver, flume::Receiver<()>) {
 }
 
 impl TransportHandle {
-    fn modify(&self, change: impl FnOnce(&mut Desired)) {
+    fn modify(&self, change: impl FnOnce(&mut TransportState)) {
         {
             let mut desired = self
                 .desired
@@ -1153,28 +1164,44 @@ impl TransportHandle {
     /// the shape every play in `handlePlayPauseClick` takes
     /// (`Player.tsx:212-233`).
     pub fn set_resolution(&self, resolution: XY<u32>) {
-        self.modify(|desired| desired.resolution = resolution);
+        self.modify(|state| state.desired.resolution = resolution);
     }
 
     pub fn play_from(&self, frame: u32) {
-        self.modify(|desired| {
-            desired.playing = true;
-            desired.seek = Some(frame);
-            desired.seek_gen += 1;
+        self.play_from_with_preview(frame, None);
+    }
+
+    fn play_from_with_preview(&self, frame: u32, preview: Option<PreviewPlayback>) {
+        self.modify(|state| {
+            state.desired.playing = true;
+            state.desired.seek = Some(frame);
+            state.desired.seek_gen += 1;
+            state.preview = preview;
         });
     }
 
     /// `stopPlayback()`: `state.playback_task.take().map(|h| h.stop())`.
     pub fn pause(&self) {
-        self.modify(|desired| desired.playing = false);
+        self.modify(|state| {
+            state.desired.playing = false;
+            state.preview = None;
+        });
+    }
+
+    fn is_current_playback(&self, generation: u64) -> bool {
+        let state = self
+            .desired
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.desired.playing && state.desired.seek_gen == generation
     }
 
     /// A paused seek: move `playhead_position` *and* push `preview_tx`, which
     /// is the only thing that produces a picture.
     pub fn seek(&self, frame: u32) {
-        self.modify(|desired| {
-            desired.seek = Some(frame);
-            desired.seek_gen += 1;
+        self.modify(|state| {
+            state.desired.seek = Some(frame);
+            state.desired.seek_gen += 1;
         });
     }
 }
@@ -1188,6 +1215,7 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
     let fps = EDITOR_PREVIEW_FPS;
     let mut applied_playing = false;
     let mut applied_gen = 0u64;
+    let mut applied_preview = false;
     // The engine's own liveness, epoch-guarded inside `EditorInstance` so a
     // deliberate stop/start transition can never masquerade as a death.
     let mut active_rx = instance.playback_watch();
@@ -1216,16 +1244,19 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
                 if !active && applied_playing {
                     tracing::debug!("engine stopped without a pause request");
                     applied_playing = false;
-                    let _ = driver.engine_stopped.try_send(());
+                    let _ = driver.engine_stopped.try_send(applied_gen);
                 }
                 continue;
             }
         }
 
-        let want = *driver
-            .desired
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (want, preview) = {
+            let state = driver
+                .desired
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (state.desired, state.preview.clone())
+        };
         let seeking = want.seek_gen != applied_gen;
 
         // A pause stops the engine outright. A seek no longer does: the
@@ -1234,7 +1265,8 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
         // instead of paying stop/warmup/audio-attach per tick -- the round
         // trip the source pays in `seekPlayheadTo`
         // (`Timeline/index.tsx:829-853`).
-        if applied_playing && !want.playing {
+        if applied_playing && (!want.playing || (seeking && (applied_preview || preview.is_some())))
+        {
             applied_playing = false;
             let handle = {
                 let mut state = instance.state.lock().await;
@@ -1283,15 +1315,22 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
         }
 
         if want.playing && !applied_playing {
-            match instance
-                .start_playback_with_handle(fps, want.resolution, None)
-                .await
-            {
+            applied_preview = preview.is_some();
+            let result = if let (Some(preview), Some(frame)) = (preview, want.seek) {
+                instance
+                    .start_preview_playback(fps, want.resolution, frame, preview)
+                    .await
+            } else {
+                instance
+                    .start_playback_with_handle(fps, want.resolution, None)
+                    .await
+            };
+            match result {
                 Ok(_) => applied_playing = true,
                 Err(error) => {
                     tracing::warn!(?error, "Editor playback could not start");
                     applied_playing = false;
-                    let _ = driver.engine_stopped.try_send(());
+                    let _ = driver.engine_stopped.try_send(applied_gen);
                 }
             }
         }
@@ -3988,15 +4027,20 @@ impl EditorWindow {
         // press restart from 0.
         // `Play shot` stops itself at the shot's own end, the way the
         // end-of-media effect stops at the timeline's.
+        let end_tolerance = if self.voiceover.is_open() {
+            0.0
+        } else {
+            1.0 / f64::from(EDITOR_PREVIEW_FPS)
+        };
         if self.playing
             && let Some(until) = self.play_until
-            && next >= until - 1. / f64::from(EDITOR_PREVIEW_FPS)
+            && next >= until - end_tolerance
         {
             self.stop_playback(cx);
             self.caption_audition_ended(cx);
         }
 
-        if self.playing && self.is_at_end() {
+        if self.playing && self.is_at_end() && !self.voiceover.is_open() {
             self.stop_playback(cx);
         }
 
@@ -4035,7 +4079,15 @@ impl EditorWindow {
     /// window would keep showing Pause over a dead engine until the user
     /// pressed it twice. Runs the ordinary pause path so `Desired` stays
     /// UI-owned and the run's stats still get reported.
-    pub fn engine_stopped(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn engine_stopped(&mut self, generation: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .transport
+            .as_ref()
+            .is_none_or(|transport| !transport.is_current_playback(generation))
+            && !self.preparing_transport_active()
+        {
+            return;
+        }
         if self.preparing_transport_active() {
             self.retry_preparing_candidate(window, cx);
             return;
@@ -4045,15 +4097,69 @@ impl EditorWindow {
         }
         tracing::info!("playback engine stopped on its own; resetting transport UI");
         self.stop_playback(cx);
+        self.voiceover_playback_ended(window, cx);
         window.refresh();
     }
 
     fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
+        if !self.voiceover.is_busy() {
+            self.start_playback_at(from, None, cx);
+        }
+    }
+
+    pub(crate) fn play_voiceover_preview(
+        &mut self,
+        from: f64,
+        preview: PreviewPlayback,
+        until: Option<f64>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.transport.is_none()
+            || self.preparing_transport_active()
+            || self.ordinary_handoff_frame.is_some()
+        {
+            return false;
+        }
+        self.start_playback_at(from, Some(preview), cx);
+        self.play_until = until;
+        true
+    }
+
+    pub(crate) fn park_voiceover_preview(&mut self, time: f64, cx: &mut Context<Self>) {
+        self.stop_playback(cx);
+        let fps = f64::from(EDITOR_PREVIEW_FPS);
+        let last_frame = ((self.total_duration() * fps).ceil() as u32).saturating_sub(1);
+        let frame = (((time * fps) + 1e-7).floor() as u32).min(last_frame);
+        if let Some(transport) = &self.transport {
+            transport.seek(frame);
+        }
+        self.playhead = frame_seconds(frame);
+        self.view.playhead = self.playhead;
+        self.timeline_view.update(cx, |_, cx| cx.notify());
+        self.transport_controls.update(cx, |_, cx| cx.notify());
+    }
+
+    pub(crate) fn voiceover_selection_range(&self) -> Option<std::ops::Range<f64>> {
+        let selection = self.selection.as_ref()?;
+        if selection.track != TrackKind::Clip {
+            return None;
+        }
+        let first = *selection.indices.iter().min()?;
+        let last = *selection.indices.iter().max()?;
+        if last.saturating_sub(first) + 1 != selection.indices.len() {
+            return None;
+        }
+        Some(self.timeline.clips.get(first)?.start..self.timeline.clips.get(last)?.end)
+    }
+
+    fn start_playback_at(
+        &mut self,
+        from: f64,
+        preview: Option<PreviewPlayback>,
+        cx: &mut Context<Self>,
+    ) {
         self.audio_library.online.cancel_preview();
         self.stop_canvas_text_edit(cx);
-        if self.voiceover.is_busy() {
-            return;
-        }
         self.library_audition = None;
         if self.caption_seek_preview {
             self.caption_seek_preview = false;
@@ -4067,8 +4173,8 @@ impl EditorWindow {
         self.preparing_seed = None;
         self.playback_follow.reset();
         // `Math.floor(editorState.playbackTime * FPS)`.
-        let frame = (from.max(0.0) * EDITOR_PREVIEW_FPS as f64).floor() as u32;
-        transport.play_from(frame);
+        let frame = ((from.max(0.0) * f64::from(EDITOR_PREVIEW_FPS)) + 1e-7).floor() as u32;
+        transport.play_from_with_preview(frame, preview);
         self.playhead = from.max(0.0);
         self.view.playhead = self.playhead;
         // A new play epoch: `last_playhead_redraw` still points at the
@@ -4163,7 +4269,11 @@ impl EditorWindow {
 
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
-    pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_play(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.voiceover.is_open() {
+            self.voiceover_play_action(window, cx);
+            return;
+        }
         self.clear_redaction_tool();
         if self.preparing_transport_active() {
             if self.preparing_controls_ready() {
@@ -4509,8 +4619,17 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.voiceover.is_open()
-            || self.camera_framing.is_open()
+        if self.voiceover.is_open() {
+            if self.focus.is_focused(window)
+                && is_playback_shortcut(&event.keystroke, false, false)
+                && !event.is_held
+            {
+                self.voiceover_play_action(window, cx);
+                cx.stop_propagation();
+            }
+            return;
+        }
+        if self.camera_framing.is_open()
             || self.caption_style_editor
             || self.sidebar.title_cards.layers.text_dialog.is_some()
             || self.sidebar.caption_translation.review_is_open()
@@ -5364,7 +5483,8 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.button != MouseButton::Left || self.transport.is_none() {
+        if self.voiceover.is_open() || event.button != MouseButton::Left || self.transport.is_none()
+        {
             return;
         }
         self.focus_root(window, cx);
@@ -12716,13 +12836,13 @@ impl EditorWindow {
                 .absolute()
                 .inset_0(),
             )
-            .child(
+            .children((!self.voiceover.is_open()).then(|| {
                 self.toolbar.clone().cached(
                     StyleRefinement::default()
                         .w_full()
                         .h(px(PLAYER_TOOLBAR_HEIGHT)),
-                ),
-            )
+                )
+            }))
             .child(self.render_preview_canvas(cx))
             .child(
                 self.transport_controls
@@ -13069,15 +13189,16 @@ impl EditorWindow {
                 }),
             )
             .child(body)
+            .children(self.render_voiceover_countdown())
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
-            .children(if self.project_ready() {
+            .children(if self.project_ready() && !self.voiceover.is_open() {
                 self.render_canvas_overlay(cx)
             } else {
                 None
             })
-            .children(if self.project_ready() {
+            .children(if self.project_ready() && !self.voiceover.is_open() {
                 self.render_caption_edit(cx)
             } else {
                 None
@@ -13200,9 +13321,23 @@ impl EditorWindow {
 
     /// The player's transport bar: the clock on the left, the transport cluster
     /// centred across the row, split and zoom on the right.
-    fn render_transport(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_transport(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = self.theme;
         let editor = theme.editor;
+        if self.voiceover.is_open() {
+            return div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
+                .px(px(14.))
+                .text_size(px(13.))
+                .text_color(Hsla::from(editor.text_2))
+                .child(timeline::format_time(self.playhead.max(0.0)))
+                .child(timeline::format_time(self.total_duration()))
+                .into_any_element();
+        }
         let player_width = self.player_width(f32::from(window.viewport_size().width));
         let compact = player_width < 760.;
         let narrow = player_width < 620.;
@@ -13432,6 +13567,7 @@ impl EditorWindow {
                         cx,
                     )),
             )
+            .into_any_element()
     }
 
     fn render_video_speed(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -14978,14 +15114,20 @@ impl Render for EditorWindow {
                                         div()
                                             .flex()
                                             .flex_col()
-                                            .when(!self.transcript.open, |card| card.flex_1())
-                                            .when(self.transcript.open, |card| {
-                                                card.flex_none().w(px(transcript_row_width(
-                                                    viewport_width,
-                                                ) * self
-                                                    .transcript
-                                                    .player_share))
-                                            })
+                                            .when(
+                                                !self.transcript.open || self.voiceover.is_open(),
+                                                |card| card.flex_1(),
+                                            )
+                                            .when(
+                                                self.transcript.open && !self.voiceover.is_open(),
+                                                |card| {
+                                                    card.flex_none().w(px(transcript_row_width(
+                                                        viewport_width,
+                                                    ) * self
+                                                        .transcript
+                                                        .player_share))
+                                                },
+                                            )
                                             .min_w_0()
                                             .min_h_0()
                                             .rounded(px(12.))
@@ -14999,26 +15141,47 @@ impl Render for EditorWindow {
                                     // The 8px gutter is the wrapper's, not the
                                     // sidebar view's: a margin inside a cached
                                     // element is not honoured.
-                                    .when(!self.transcript.open, |row| {
+                                    .when_some(self.render_voiceover(cx), |row, panel| {
                                         row.child(
                                             div().flex_none().h_full().pl(px(8.)).child(
-                                                self.sidebar_view.clone().cached(
-                                                    StyleRefinement::default()
-                                                        .w(px(SIDEBAR_WIDTH))
-                                                        .h_full(),
-                                                ),
+                                                div()
+                                                    .w(px(SIDEBAR_WIDTH))
+                                                    .h_full()
+                                                    .rounded(px(12.))
+                                                    .border_1()
+                                                    .border_color(self.card_line())
+                                                    .bg(self.panel_bg())
+                                                    .overflow_hidden()
+                                                    .child(panel),
                                             ),
                                         )
                                     })
-                                    .when(self.transcript.open, |row| {
-                                        row.child(self.render_transcript_grip(cx)).child(
-                                            div().flex_1().min_w_0().h_full().child(
-                                                self.transcript_view
-                                                    .clone()
-                                                    .cached(StyleRefinement::default().size_full()),
-                                            ),
-                                        )
-                                    }),
+                                    .when(
+                                        !self.transcript.open && !self.voiceover.is_open(),
+                                        |row| {
+                                            row.child(
+                                                div().flex_none().h_full().pl(px(8.)).child(
+                                                    self.sidebar_view.clone().cached(
+                                                        StyleRefinement::default()
+                                                            .w(px(SIDEBAR_WIDTH))
+                                                            .h_full(),
+                                                    ),
+                                                ),
+                                            )
+                                        },
+                                    )
+                                    .when(
+                                        self.transcript.open && !self.voiceover.is_open(),
+                                        |row| {
+                                            row.child(self.render_transcript_grip(cx)).child(
+                                                div().flex_1().min_w_0().h_full().child(
+                                                    self.transcript_view.clone().cached(
+                                                        StyleRefinement::default().size_full(),
+                                                    ),
+                                                ),
+                                            )
+                                        },
+                                    ),
                             )
                             // The timeline card: the wrapper is owned here so
                             // `render_timeline` keeps laying out inside a plain
@@ -15039,9 +15202,15 @@ impl Render for EditorWindow {
                                             .bg(self.panel_bg())
                                             .shadow(theme.editor.card_shadow())
                                             .overflow_hidden()
+                                            .relative()
                                             .child(self.timeline_view.clone().cached(
                                                 StyleRefinement::default().w_full().h_full(),
-                                            )),
+                                            ))
+                                            .children(
+                                                self.voiceover
+                                                    .is_open()
+                                                    .then(|| div().absolute().inset_0().occlude()),
+                                            ),
                                     )
                                     // The grip rides the gap between the two
                                     // cards rather than taking a strip of the
@@ -15303,7 +15472,6 @@ impl Render for EditorWindow {
                         .cursor(drag.cursor())
                     }),
             )
-            .children(self.render_voiceover(cx))
     }
 }
 
@@ -15973,14 +16141,14 @@ mod tests {
             Some(3.0)
         );
         assert_eq!(pending, None);
-        let restored = *driver.desired.lock().unwrap();
+        let restored = driver.desired.lock().unwrap().desired;
         assert!(!restored.playing);
         assert_eq!(restored.seek, Some(3 * EDITOR_PREVIEW_FPS));
         assert_eq!(
             restore_import_transport(&mut pending, Some(&handle), 41.6),
             None
         );
-        assert_eq!(*driver.desired.lock().unwrap(), restored);
+        assert_eq!(driver.desired.lock().unwrap().desired, restored);
     }
 
     #[test]
@@ -15993,7 +16161,7 @@ mod tests {
                 None
             );
             assert_eq!(pending, None);
-            assert_eq!(*driver.desired.lock().unwrap(), Desired::default());
+            assert_eq!(driver.desired.lock().unwrap().desired, Desired::default());
         }
         let mut pending = Some(3.0);
         for total in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
@@ -16002,7 +16170,7 @@ mod tests {
                 None
             );
             assert_eq!(pending, Some(3.0));
-            assert_eq!(*driver.desired.lock().unwrap(), Desired::default());
+            assert_eq!(driver.desired.lock().unwrap().desired, Desired::default());
         }
         assert_eq!(
             restore_import_transport(&mut pending, Some(&handle), 10.0),
@@ -16024,7 +16192,7 @@ mod tests {
             let restored = restore_import_transport(&mut pending, Some(&handle), total).unwrap();
             assert_eq!(restored, frame_seconds(frame));
             assert!(restored <= total);
-            let desired = *driver.desired.lock().unwrap();
+            let desired = driver.desired.lock().unwrap().desired;
             assert!(!desired.playing);
             assert_eq!(desired.seek, Some(frame));
         }
@@ -16098,7 +16266,7 @@ mod tests {
         }
 
         fn desired(driver: &TransportDriver) -> Desired {
-            *driver.desired.lock().unwrap()
+            driver.desired.lock().unwrap().desired
         }
 
         #[gpui::test]
@@ -18450,6 +18618,20 @@ mod tests {
         assert_eq!((1.5051 * EDITOR_PREVIEW_FPS as f64).round() as u32, 90);
     }
 
+    #[test]
+    fn voiceover_transport_ignores_stop_from_a_previous_play_request() {
+        let (handle, driver, _) = transport();
+        handle.play_from(12);
+        let previous = driver.desired.lock().unwrap().desired.seek_gen;
+        assert!(handle.is_current_playback(previous));
+        handle.pause();
+        assert!(!handle.is_current_playback(previous));
+        handle.play_from(24);
+        let current = driver.desired.lock().unwrap().desired.seek_gen;
+        assert!(!handle.is_current_playback(previous));
+        assert!(handle.is_current_playback(current));
+    }
+
     /// The desired-state transport: a play is always a seek plus a start, a
     /// seek always bumps the generation (so seeking to the frame you are on
     /// still re-renders), and a pause moves nothing else.
@@ -18457,10 +18639,11 @@ mod tests {
     fn transport_desired_state_tracks_the_sources_call_order() {
         let (handle, driver, _engine_stopped_rx) = transport();
         let read = || {
-            *driver
+            driver
                 .desired
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .desired
         };
         assert_eq!(read(), Desired::default());
 

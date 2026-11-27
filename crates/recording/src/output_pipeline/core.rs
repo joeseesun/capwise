@@ -1,3 +1,8 @@
+//! [INPUT]: 捕获设备、媒体时间戳和封装器。
+//! [OUTPUT]: 录制管线及精确到采样时间的配音暂停边界。
+//! [POS]: 将屏幕、镜头和麦克风数据写入媒体文件。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use super::start_gate::{AudioAdmission, RecordingStartGate};
 use crate::sources::audio_mixer::{AudioMixer, MIXER_STOP_TIMEOUT};
 use anyhow::{Context, anyhow};
@@ -2119,7 +2124,7 @@ impl SharedWallClockPause {
         }
     }
 
-    fn set_paused_at(&self, paused: bool, instant: Instant) {
+    pub fn set_paused_at(&self, paused: bool, instant: Instant) {
         let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         let active = inner
             .capture_pauses
@@ -4137,6 +4142,10 @@ impl PreparedAudioSources {
     ) {
         let audio_info = self.audio_info;
         let mixed_audio = self.erased_audio_sources.len() > 1;
+        let capture_time_pause = mixed_audio
+            || start_gate
+                .as_ref()
+                .is_some_and(RecordingStartGate::requires_explicit_arm);
         let has_wireless_source = self.has_wireless_source;
         let health_tx = setup_ctx.health_tx().clone();
         let master_clock = setup_ctx.master_clock().clone();
@@ -4179,7 +4188,7 @@ impl PreparedAudioSources {
                                     muxer: &muxer,
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
-                                    capture_time_pause: mixed_audio,
+                                    capture_time_pause,
                                     video_start_gate: video_start_gate.as_ref(),
                                     start_gate: &start_gate.gate,
                                     allow_audio_degradation,
@@ -4294,7 +4303,7 @@ impl PreparedAudioSources {
                                     muxer: &muxer,
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
-                                    capture_time_pause: mixed_audio,
+                                    capture_time_pause,
                                     video_start_gate: video_start_gate.as_ref(),
                                     start_gate: &start_gate.gate,
                                     allow_audio_degradation,
@@ -4357,7 +4366,7 @@ impl PreparedAudioSources {
                     }
                 }
 
-                let final_pause_duration = if mixed_audio { pause_at_stop } else { shared_pause.total_pause_duration() };
+                let final_pause_duration = if capture_time_pause { pause_at_stop } else { shared_pause.total_pause_duration() };
 
                 if let Some(scope) = &required_scope
                     && !mixed_sources_stopped
@@ -4395,7 +4404,7 @@ impl PreparedAudioSources {
                     let track_target = gap_tracker
                         .track_start_offset()
                         .map(|offset| {
-                            let offset = if mixed_audio {
+                            let offset = if capture_time_pause {
                                 shared_pause.unpaused_offset(timestamps, offset)
                             } else {
                                 offset
@@ -5210,6 +5219,10 @@ impl OutputPipeline {
             },
             media_error,
         })
+    }
+
+    pub fn capture_pause(&self) -> SharedWallClockPause {
+        self.shared_pause.clone()
     }
 
     pub fn pause(&self) {

@@ -1,6 +1,11 @@
+//! [INPUT]: 工程状态、渲染数据和音频素材。
+//! [OUTPUT]: 编辑实例及临时配音预览。
+//! [POS]: 为播放器提供工程快照和媒体缓存。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use crate::completed_audio::{CompletedAudioHandoff, CompletedAudioSegment};
 use crate::editor;
-use crate::playback::{self, PlaybackHandle, PlaybackStartError};
+use crate::playback::{self, PlaybackHandle, PlaybackStartError, PreviewPlayback};
 use cap_project::StudioRecordingMeta;
 use cap_project::{
     CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
@@ -763,7 +768,7 @@ impl EditorInstance {
             return Ok(false);
         }
         let frame = crate::preparing_handoff::presentation_frame(&snapshot, fps);
-        self.start_playback_internal(fps, resolution, Some(frame), Some(adoption))
+        self.start_playback_internal(fps, resolution, Some(frame), Some(adoption), None)
             .await?;
         Ok(true)
     }
@@ -936,6 +941,24 @@ impl EditorInstance {
         resolution_base: XY<u32>,
         start_frame_number: Option<u32>,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
+        self.finish_preparing_playback().await?;
+        self.start_playback_internal(fps, resolution_base, start_frame_number, None, None)
+            .await
+    }
+
+    pub async fn start_preview_playback(
+        self: &Arc<Self>,
+        fps: u32,
+        resolution: XY<u32>,
+        frame: u32,
+        preview: PreviewPlayback,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
+        self.finish_preparing_playback().await?;
+        self.start_playback_internal(fps, resolution, Some(frame), None, Some(preview))
+            .await
+    }
+
+    async fn finish_preparing_playback(&self) -> Result<(), PlaybackStartError> {
         let adoption = self.preparing_adoption();
         if let Some(adoption) = adoption {
             if !adoption.is_owner() {
@@ -955,8 +978,7 @@ impl EditorInstance {
                     .take(),
             );
         }
-        self.start_playback_internal(fps, resolution_base, start_frame_number, None)
-            .await
+        Ok(())
     }
 
     async fn start_playback_internal(
@@ -965,8 +987,25 @@ impl EditorInstance {
         resolution_base: XY<u32>,
         start_frame_number: Option<u32>,
         adoption: Option<crate::PreparingPlaybackAdoption>,
+        preview: Option<PreviewPlayback>,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
-        let music = self.load_music_tracks().await;
+        let fixed_speed = preview.is_some();
+        let (music, project, voiceover) = match preview {
+            Some(PreviewPlayback::Voiceover(voiceover)) => (
+                Default::default(),
+                self.project_config.0.subscribe(),
+                Some(voiceover),
+            ),
+            Some(PreviewPlayback::Review(project)) => {
+                let music = self.load_music_tracks_for((*project).clone()).await;
+                (music, watch::channel((*project).clone()).1, None)
+            }
+            None => (
+                self.load_music_tracks().await,
+                self.project_config.0.subscribe(),
+                None,
+            ),
+        };
 
         let (mut handle, prev, epoch) = {
             let mut state = self.state.lock().await;
@@ -981,24 +1020,34 @@ impl EditorInstance {
 
             let playback = playback::Playback {
                 segment_medias: self.segment_medias.clone(),
-                music: music.clone(),
-                music_loader: Some(Arc::new(move |project| {
-                    let mut cache = music_cache
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    crate::load_music_tracks(project, &music_project_path, &mut cache)
-                })),
+                music,
+                music_loader: (!fixed_speed).then(|| -> playback::PlaybackMusicLoader {
+                    Arc::new(move |project| {
+                        let mut cache = music_cache
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        crate::load_music_tracks(project, &music_project_path, &mut cache)
+                    })
+                }),
                 renderer: self.renderer.clone(),
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
-                project: self.project_config.0.subscribe(),
+                project,
                 audio_output: self.audio_output.clone(),
                 telemetry: None,
-                preview_speed: self.preview_speed.clone(),
+                preview_speed: if fixed_speed {
+                    Default::default()
+                } else {
+                    self.preview_speed.clone()
+                },
             };
             let playback_handle = if let Some(adoption) = adoption {
                 playback
                     .start_with_adopted_audio(fps, resolution_base, adoption)
+                    .await?
+            } else if let Some(voiceover) = voiceover {
+                playback
+                    .start_voiceover(fps, resolution_base, voiceover)
                     .await?
             } else {
                 playback
