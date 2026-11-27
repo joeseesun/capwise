@@ -1,3 +1,8 @@
+//! [INPUT]: 工程配置、视频解码、预览渲染和音频输出。
+//! [OUTPUT]: 实时播放和同步配音时钟。
+//! [POS]: 编辑器预览传输引擎。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use cap_project::{
     ClipOffsets, ClipTransitionType, ProjectConfiguration, TimelineFrameMapping, XY,
 };
@@ -337,6 +342,14 @@ pub enum PlaybackStartError {
     InvalidFps,
     PreparingCleanup,
     PreparingCandidate,
+}
+
+#[derive(Clone)]
+pub struct VoiceoverPreview {
+    pub start: Arc<dyn Fn() -> Option<Instant> + Send + Sync>,
+    pub stop: Arc<dyn Fn(Instant) + Send + Sync>,
+    pub frame_offset: Duration,
+    pub duration: Duration,
 }
 
 pub struct Playback {
@@ -777,7 +790,7 @@ impl Playback {
         resolution_base: XY<u32>,
         adoption: crate::PreparingPlaybackAdoption,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
-        self.start_inner(fps, resolution_base, None, Some(adoption))
+        self.start_inner(fps, resolution_base, None, Some(adoption), None)
             .await
     }
 
@@ -787,7 +800,18 @@ impl Playback {
         resolution_base: XY<u32>,
         resource: Option<u64>,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
-        self.start_inner(fps, resolution_base, resource, None).await
+        self.start_inner(fps, resolution_base, resource, None, None)
+            .await
+    }
+
+    pub(crate) async fn start_voiceover(
+        self,
+        fps: u32,
+        resolution_base: XY<u32>,
+        voiceover: VoiceoverPreview,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
+        self.start_inner(fps, resolution_base, None, None, Some(voiceover))
+            .await
     }
 
     async fn start_inner(
@@ -796,6 +820,7 @@ impl Playback {
         resolution_base: XY<u32>,
         resource: Option<u64>,
         adopted: Option<crate::PreparingPlaybackAdoption>,
+        voiceover: Option<VoiceoverPreview>,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
         let start_call = Instant::now();
         let mut diagnostic = Operation::start(
@@ -1124,7 +1149,11 @@ impl Playback {
         // decode kicked off at editor open has finished.
         diagnostic.stage("waiting_for_audio_decode");
         let audio_wait_start = Instant::now();
-        let audio_segments = get_audio_segments(&self.segment_medias).await;
+        let audio_segments = if voiceover.is_some() {
+            Vec::new()
+        } else {
+            get_audio_segments(&self.segment_medias).await
+        };
         if let Some(telemetry) = &self.telemetry {
             telemetry.emit(PlaybackTelemetryEvent::AudioSegmentsResolved {
                 elapsed: audio_wait_start.elapsed(),
@@ -1573,7 +1602,20 @@ impl Playback {
             ));
             diagnostic.field(Field::flag("audio_output_started", has_audio));
             diagnostic.stage("playing");
-            let mut start = Instant::now();
+            let (mut start, voiceover_end) = if let Some(voiceover) = &voiceover {
+                let Some(anchor) = (!*stop_rx.borrow()).then(|| (voiceover.start)()).flatten()
+                else {
+                    diagnostic.finish(false);
+                    let _ = event_tx.send(PlaybackEvent::Stop);
+                    return;
+                };
+                (
+                    anchor.checked_sub(voiceover.frame_offset).unwrap_or(anchor),
+                    Some(anchor + voiceover.duration),
+                )
+            } else {
+                (Instant::now(), None)
+            };
             let mut clock_anchor_frame = playback_start_frame;
 
             let mut transitioned_audio = None;
@@ -1825,7 +1867,13 @@ impl Playback {
                 let next_deadline = start + frame_duration.mul_f64(frame_offset / speed.as_f64());
 
                 if adopted.is_none() {
-                    precision_sleep_sync(next_deadline);
+                    precision_sleep_sync(
+                        voiceover_end.map_or(next_deadline, |end| next_deadline.min(end)),
+                    );
+                }
+
+                if voiceover_end.is_some_and(|end| Instant::now() >= end) {
+                    break;
                 }
 
                 if *stop_rx.borrow() {
@@ -2359,6 +2407,10 @@ impl Playback {
                 }
             }
 
+            if let Some(voiceover) = voiceover {
+                let now = Instant::now();
+                (voiceover.stop)(voiceover_end.map_or(now, |end| now.min(end)));
+            }
             diagnostic.field(Field::number("frames_skipped", total_frames_skipped));
             diagnostic.stage("loop_ended");
             diagnostic.finish(true);

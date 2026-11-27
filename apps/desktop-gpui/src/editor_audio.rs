@@ -1,3 +1,8 @@
+//! [INPUT]: 音频素材、工程时间线和配音状态。
+//! [OUTPUT]: 配乐试听、轨道导入和音频替换。
+//! [POS]: 配音录制期间暂停独立素材试听。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 /*
  * [INPUT]: 读取内置配乐、在线下载和项目时间线。
  * [OUTPUT]: 提供音频选择、试听及项目音频素材的导入。
@@ -859,6 +864,9 @@ impl EditorWindow {
         temporary: Option<tempfile::TempPath>,
         cx: &mut Context<Self>,
     ) {
+        if self.voiceover.is_busy() {
+            return;
+        }
         self.audio_library.audition_failed = false;
         let was_playing = self
             .library_audition

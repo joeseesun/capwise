@@ -1,3 +1,8 @@
+//! [INPUT]: 捕获设备、媒体时间戳和封装器。
+//! [OUTPUT]: 录制管线及通过录制门控的音频帧。
+//! [POS]: 将屏幕、镜头和麦克风数据写入媒体文件。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use super::start_gate::{AudioAdmission, RecordingStartGate};
 use crate::sources::audio_mixer::{AudioMixer, MIXER_STOP_TIMEOUT};
 use anyhow::{Context, anyhow};
@@ -2119,7 +2124,7 @@ impl SharedWallClockPause {
         }
     }
 
-    fn set_paused_at(&self, paused: bool, instant: Instant) {
+    pub fn set_paused_at(&self, paused: bool, instant: Instant) {
         let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         let active = inner
             .capture_pauses
@@ -2263,6 +2268,7 @@ impl OutputPipeline {
             master_clock: None,
             audio_anchor: AudioAnchor::FirstFrame,
             start_gate: None,
+            audio_frame_observer: None,
         }
     }
 }
@@ -2345,6 +2351,8 @@ type AudioSourceSetupFn = Box<
         + Send,
 >;
 
+type AudioFrameObserver = Arc<dyn Fn(&AudioFrame, Duration) + Send + Sync>;
+
 pub struct OutputPipelineBuilder<TVideo> {
     path: PathBuf,
     video: TVideo,
@@ -2353,6 +2361,7 @@ pub struct OutputPipelineBuilder<TVideo> {
     master_clock: Option<Arc<MasterClock>>,
     audio_anchor: AudioAnchor,
     start_gate: Option<RecordingStartGate>,
+    audio_frame_observer: Option<AudioFrameObserver>,
 }
 
 pub struct NoVideo;
@@ -2407,6 +2416,14 @@ impl<THasVideo> OutputPipelineBuilder<THasVideo> {
 }
 
 impl OutputPipelineBuilder<NoVideo> {
+    pub fn with_audio_frame_observer(
+        mut self,
+        observer: impl Fn(&AudioFrame, Duration) + Send + Sync + 'static,
+    ) -> Self {
+        self.audio_frame_observer = Some(Arc::new(observer));
+        self
+    }
+
     pub fn with_video<TVideo: VideoSource>(
         self,
         config: TVideo::Config,
@@ -2419,6 +2436,7 @@ impl OutputPipelineBuilder<NoVideo> {
             master_clock: self.master_clock,
             audio_anchor: self.audio_anchor,
             start_gate: self.start_gate,
+            audio_frame_observer: self.audio_frame_observer,
         }
     }
 }
@@ -3045,6 +3063,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             master_clock,
             audio_anchor,
             start_gate,
+            audio_frame_observer,
             ..
         } = self;
 
@@ -3068,7 +3087,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         let (first_tx, first_rx) = oneshot::channel();
         let (first_rx, first_seen) = observe_first_timestamp(first_rx);
 
-        let audio = setup_audio_sources(
+        let mut audio = setup_audio_sources(
             &mut setup_ctx,
             audio_sources,
             build_ctx.stop_token.clone(),
@@ -3076,6 +3095,9 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         )
         .await
         .context("setup_audio_sources")?;
+        if let Some(audio) = &mut audio {
+            audio.frame_observer = audio_frame_observer;
+        }
 
         let muxer = setup_muxer::<TMuxer>(
             muxer_config,
@@ -3171,6 +3193,7 @@ impl OutputPipelineBuilder<NoVideo> {
             master_clock,
             audio_anchor,
             start_gate,
+            audio_frame_observer,
             ..
         } = self;
 
@@ -3191,7 +3214,7 @@ impl OutputPipelineBuilder<NoVideo> {
         let (first_tx, first_rx) = oneshot::channel();
         let (first_rx, first_seen) = observe_first_timestamp(first_rx);
 
-        let audio = setup_audio_sources(
+        let mut audio = setup_audio_sources(
             &mut setup_ctx,
             audio_sources,
             build_ctx.stop_token.clone(),
@@ -3199,6 +3222,9 @@ impl OutputPipelineBuilder<NoVideo> {
         )
         .await
         .context("setup_audio_sources")?;
+        if let Some(audio) = &mut audio {
+            audio.frame_observer = audio_frame_observer;
+        }
 
         let muxer = setup_muxer::<TMuxer>(
             muxer_config,
@@ -4117,6 +4143,7 @@ struct PreparedAudioSources {
     audio_rx: mpsc::Receiver<AudioFrame>,
     erased_audio_sources: Vec<ErasedAudioSource>,
     has_wireless_source: bool,
+    frame_observer: Option<AudioFrameObserver>,
 }
 
 impl PreparedAudioSources {
@@ -4137,6 +4164,10 @@ impl PreparedAudioSources {
     ) {
         let audio_info = self.audio_info;
         let mixed_audio = self.erased_audio_sources.len() > 1;
+        let capture_time_pause = mixed_audio
+            || start_gate
+                .as_ref()
+                .is_some_and(RecordingStartGate::requires_explicit_arm);
         let has_wireless_source = self.has_wireless_source;
         let health_tx = setup_ctx.health_tx().clone();
         let master_clock = setup_ctx.master_clock().clone();
@@ -4179,7 +4210,8 @@ impl PreparedAudioSources {
                                     muxer: &muxer,
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
-                                    capture_time_pause: mixed_audio,
+                                    capture_time_pause,
+                                    observer: self.frame_observer.as_ref(),
                                     video_start_gate: video_start_gate.as_ref(),
                                     start_gate: &start_gate.gate,
                                     allow_audio_degradation,
@@ -4294,7 +4326,8 @@ impl PreparedAudioSources {
                                     muxer: &muxer,
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
-                                    capture_time_pause: mixed_audio,
+                                    capture_time_pause,
+                                    observer: self.frame_observer.as_ref(),
                                     video_start_gate: video_start_gate.as_ref(),
                                     start_gate: &start_gate.gate,
                                     allow_audio_degradation,
@@ -4357,7 +4390,7 @@ impl PreparedAudioSources {
                     }
                 }
 
-                let final_pause_duration = if mixed_audio { pause_at_stop } else { shared_pause.total_pause_duration() };
+                let final_pause_duration = if capture_time_pause { pause_at_stop } else { shared_pause.total_pause_duration() };
 
                 if let Some(scope) = &required_scope
                     && !mixed_sources_stopped
@@ -4395,7 +4428,7 @@ impl PreparedAudioSources {
                     let track_target = gap_tracker
                         .track_start_offset()
                         .map(|offset| {
-                            let offset = if mixed_audio {
+                            let offset = if capture_time_pause {
                                 shared_pause.unpaused_offset(timestamps, offset)
                             } else {
                                 offset
@@ -4529,6 +4562,7 @@ struct AudioFrameProcessContext<'a, TMutex: AudioMuxer> {
     health_tx: &'a HealthSender,
     shared_pause: &'a SharedWallClockPause,
     capture_time_pause: bool,
+    observer: Option<&'a AudioFrameObserver>,
     video_start_gate: Option<&'a VideoStartGate>,
     start_gate: &'a Option<RecordingStartGate>,
     allow_audio_degradation: bool,
@@ -4910,6 +4944,9 @@ async fn process_audio_frame_part<TMutex: AudioMuxer>(
         );
     }
 
+    if let Some(observer) = ctx.observer {
+        observer(&frame, timestamp);
+    }
     if let Err(e) = ctx.muxer.lock().await.send_audio_frame(frame, timestamp) {
         if ctx.allow_audio_degradation {
             warn!(
@@ -5019,6 +5056,7 @@ async fn setup_audio_sources(
         audio_rx,
         erased_audio_sources,
         has_wireless_source,
+        frame_observer: None,
     }))
 }
 
@@ -5210,6 +5248,10 @@ impl OutputPipeline {
             },
             media_error,
         })
+    }
+
+    pub fn capture_pause(&self) -> SharedWallClockPause {
+        self.shared_pause.clone()
     }
 
     pub fn pause(&self) {
@@ -10110,6 +10152,7 @@ mod tests {
                         health_tx: &self.health_tx,
                         shared_pause: &self.shared_pause,
                         capture_time_pause: self.capture_time_pause,
+                        observer: None,
                         video_start_gate: None,
                         start_gate: &self.start_gate,
                         allow_audio_degradation: true,
@@ -11571,6 +11614,7 @@ mod tests {
                             audio_rx: receiver,
                             erased_audio_sources: vec![source],
                             has_wireless_source: false,
+                            frame_observer: None,
                         }
                         .configure(
                             &mut context,

@@ -1,3 +1,8 @@
+//! [INPUT]: 编辑器选区和工程素材。
+//! [OUTPUT]: 编辑属性控件和已有配音的重录入口。
+//! [POS]: 时间线片段的属性侧栏。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 //! The eight segment panels, and the text fields the whole sidebar shares.
 //!
 //! `sidebarSelection()` (`ConfigSidebar.tsx:577-580`) is the timeline selection
@@ -6466,6 +6471,17 @@ impl EditorWindow {
                     .text_color(Hsla::from(theme.editor.text_1))
                     .child(SharedString::from(name)),
             )
+            .when(segment.path.starts_with("content/voiceovers/"), |row| {
+                row.child(
+                    ui::EditorButton::plain(&theme, "audio-rerecord")
+                        .tinted(&theme)
+                        .left_icon("icons/microphone.svg")
+                        .label(tr::editor::voiceover::retake())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_existing_voiceover(index, window, cx);
+                        })),
+                )
+            })
             .child(
                 ui::EditorButton::plain(
                     &theme,

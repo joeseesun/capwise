@@ -1,14 +1,20 @@
+//! [INPUT]: 麦克风采样、共享预览时钟和工程目录。
+//! [OUTPUT]: 可恢复的配音素材及其录制状态。
+//! [POS]: 管理配音采样的开始、暂停和落盘。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use cap_recording::{
-    OutputPipeline, OwnedAudioPipelineScope, PipelineHealthEvent,
+    AudioAnchor, AudioFrame, OutputPipeline, OwnedAudioPipelineScope, PipelineHealthEvent,
+    RecordingStartGate, SharedWallClockPause,
     feeds::microphone::MicrophoneFeedLock,
     ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig},
     sources::Microphone,
@@ -138,13 +144,159 @@ impl TakeManifest {
     }
 }
 
+#[derive(Default)]
+struct LiveAudioPeaks {
+    peaks_db: Vec<f32>,
+    snapshot: Arc<Vec<f32>>,
+    changed: bool,
+}
+
+impl LiveAudioPeaks {
+    fn push(&mut self, frame: &AudioFrame, offset: Duration) {
+        let rate = frame.rate();
+        if rate < 10
+            || frame.channels() != 1
+            || frame.format() != ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed)
+        {
+            return;
+        }
+        let first = (offset.as_secs_f64() * f64::from(rate)).round() as usize;
+        let per_bin = rate as usize / 10;
+        let mut remaining = frame.plane::<f32>(0);
+        let mut pos = first;
+        while !remaining.is_empty() {
+            let index = pos / per_bin;
+            let count = remaining.len().min(per_bin - pos % per_bin);
+            let (samples, rest) = remaining.split_at(count);
+            let peak = samples
+                .iter()
+                .map(|sample| sample.abs())
+                .fold(0.0, f32::max);
+            let db = 20.0 * peak.max(0.001).log10();
+            if self.peaks_db.len() <= index {
+                self.peaks_db.resize(index + 1, -60.0);
+                self.changed = true;
+            }
+            if db > self.peaks_db[index] {
+                self.peaks_db[index] = db;
+                self.changed = true;
+            }
+            remaining = rest;
+            pos += count;
+        }
+    }
+
+    fn snapshot(&mut self) -> Arc<Vec<f32>> {
+        if std::mem::take(&mut self.changed) {
+            self.snapshot = Arc::new(self.peaks_db.clone());
+        }
+        self.snapshot.clone()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct VoiceoverStatus {
     pub state: TakeState,
     pub duration_estimate: Duration,
     pub first_sample_seen: bool,
+    pub peaks: Arc<Vec<f32>>,
     pub health: Vec<PipelineHealthEvent>,
     pub error: Option<String>,
+}
+
+#[derive(Default)]
+pub(crate) struct VoiceoverClock {
+    gate: OnceLock<RecordingStartGate>,
+    state: Mutex<VoiceoverClockState>,
+}
+
+#[derive(Default)]
+struct VoiceoverClockState {
+    pause: Option<SharedWallClockPause>,
+    run: u64,
+    started: Option<Instant>,
+    elapsed: Duration,
+}
+
+impl VoiceoverClock {
+    pub(crate) fn preview(
+        self: &Arc<Self>,
+        frame_offset: Duration,
+        duration: Duration,
+    ) -> cap_editor::VoiceoverPreview {
+        let run = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.run = state.run.wrapping_add(1);
+            state.run
+        };
+        let start = self.clone();
+        let stop = self.clone();
+        cap_editor::VoiceoverPreview {
+            start: Arc::new(move || start.begin(run)),
+            stop: Arc::new(move |at| {
+                stop.hold(Some(run), at);
+            }),
+            frame_offset,
+            duration,
+        }
+    }
+
+    fn begin(&self, run: u64) -> Option<Instant> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if run != state.run || state.started.is_some() {
+            return None;
+        }
+        let pause = state.pause.as_ref()?;
+        let anchor = Timestamps::now();
+        let at = anchor.instant();
+        if !self.gate.get()?.arm_at(anchor) {
+            pause.set_paused_at(false, at);
+        }
+        state.started = Some(at);
+        Some(at)
+    }
+
+    pub(crate) fn hold(&self, run: Option<u64>, at: Instant) -> Duration {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if run.is_none_or(|run| run == state.run) {
+            state.run = state.run.wrapping_add(1);
+            if let Some(started) = state.started.take() {
+                if let Some(pause) = &state.pause {
+                    pause.set_paused_at(true, at);
+                }
+                state.elapsed += at.saturating_duration_since(started);
+            }
+        }
+        state.elapsed
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .started
+            .is_some()
+    }
+
+    pub(crate) fn elapsed(&self, at: Instant) -> Duration {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.elapsed
+            + state
+                .started
+                .map_or(Duration::ZERO, |start| at.saturating_duration_since(start))
+    }
 }
 
 pub struct VoiceoverSession {
@@ -166,6 +318,14 @@ impl VoiceoverSession {
         request: VoiceoverRequest,
         microphone: Arc<MicrophoneFeedLock>,
     ) -> Result<Self> {
+        Self::start_with_clock(request, microphone, None).await
+    }
+
+    pub(crate) async fn start_with_clock(
+        request: VoiceoverRequest,
+        microphone: Arc<MicrophoneFeedLock>,
+        sync: Option<Arc<VoiceoverClock>>,
+    ) -> Result<Self> {
         let prepared_request = request.clone();
         let lease =
             tokio::task::spawn_blocking(move || TakeLease::create(prepared_request)).await??;
@@ -179,6 +339,7 @@ impl VoiceoverSession {
             state: TakeState::Recording,
             duration_estimate: Duration::ZERO,
             first_sample_seen: false,
+            peaks: Arc::default(),
             health: Vec::new(),
             error: None,
         });
@@ -192,11 +353,27 @@ impl VoiceoverSession {
         tokio::spawn(async move {
             let epoch = Timestamps::now();
             let scope = OwnedAudioPipelineScope::default();
+            let peaks = Arc::new(Mutex::new(LiveAudioPeaks::default()));
+            let samples = peaks.clone();
+            let mut builder = OutputPipeline::builder(lease.dir.join(CAPTURE))
+                .with_audio_source::<Microphone>(microphone)
+                .with_timestamps(epoch)
+                .with_audio_frame_observer(move |frame, offset| {
+                    samples
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(frame, offset);
+                });
+            if let Some(clock) = &sync {
+                builder = builder
+                    .with_start_gate(Some(
+                        clock.gate.get_or_init(RecordingStartGate::manual).clone(),
+                    ))
+                    .with_audio_anchor(AudioAnchor::PipelineEpoch);
+            }
             let pipeline = scope
                 .build::<FragmentedAudioMuxer>(
-                    OutputPipeline::builder(lease.dir.join(CAPTURE))
-                        .with_audio_source::<Microphone>(microphone)
-                        .with_timestamps(epoch),
+                    builder,
                     FragmentedAudioMuxerConfig {
                         shared_pause_state: None,
                         write_behind: cfg!(target_os = "macos"),
@@ -205,9 +382,22 @@ impl VoiceoverSession {
                 .await;
             match pipeline {
                 Ok(pipeline) => {
+                    if let Some(clock) = &sync {
+                        clock
+                            .state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .pause = Some(pipeline.capture_pause());
+                    }
                     let _ = ready_tx.send(Ok(()));
                     run_session(
-                        lease, manifest, pipeline, scope, epoch, command_rx, status_tx,
+                        lease,
+                        manifest,
+                        pipeline,
+                        scope,
+                        (epoch, sync, peaks),
+                        command_rx,
+                        status_tx,
                     )
                     .await;
                 }
@@ -395,7 +585,11 @@ async fn run_session(
     mut manifest: TakeManifest,
     mut pipeline: OutputPipeline,
     scope: OwnedAudioPipelineScope,
-    epoch: Timestamps,
+    (epoch, synced, peaks): (
+        Timestamps,
+        Option<Arc<VoiceoverClock>>,
+        Arc<Mutex<LiveAudioPeaks>>,
+    ),
     mut commands: mpsc::UnboundedReceiver<Command>,
     status: watch::Sender<VoiceoverStatus>,
 ) {
@@ -412,7 +606,12 @@ async fn run_session(
                 clock.observe_first(*first.borrow(), epoch);
                 status.send_modify(|value| {
                     value.first_sample_seen = clock.first.is_some();
-                    value.duration_estimate = clock.duration(Instant::now());
+                    value.peaks = peaks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).snapshot();
+                    let now = Instant::now();
+                    value.duration_estimate = synced.as_ref().map_or_else(
+                        || clock.duration(now),
+                        |sync| sync.elapsed(now),
+                    );
                 });
                 continue;
             },

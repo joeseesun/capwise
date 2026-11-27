@@ -458,3 +458,72 @@ fn the_bgra_surface_frame_matches_the_rgba_render() {
         "surface pixels diverge from the RGBA render (max channel delta {max_delta})"
     );
 }
+
+#[test]
+fn voiceover_preview_advances_silent_picture_and_ends_at_the_recording_boundary() {
+    let Some(source) = std::env::var_os("CAP_GPUI_E0_PROJECT").map(PathBuf::from) else {
+        return;
+    };
+    let _serial = E0_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let copy = tempfile::tempdir().unwrap();
+    let project = copy.path().join("voiceover.cap");
+    copy_dir(&source, &project).unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (frame_tx, frame_rx) = flume::unbounded();
+        let (clock_tx, clock_rx) = flume::unbounded();
+        let audio = Arc::new(AudioOutput::new_headless(Box::new(|_, _| {})));
+        let instance = EditorInstance::new_with_audio_output(
+            project,
+            |_| {},
+            Box::new(move |frame, _| {
+                if let EditorFrameOutput::Rgba(frame) = frame {
+                    let _ = frame_tx.send(frame.frame_number);
+                }
+            }),
+            None,
+            audio,
+        )
+        .await
+        .unwrap();
+        let start_clock = clock_tx.clone();
+        let duration = Duration::from_millis(450);
+        let preview = cap_editor::VoiceoverPreview {
+            start: Arc::new(move || {
+                let at = std::time::Instant::now();
+                let _ = start_clock.send(at);
+                Some(at)
+            }),
+            stop: Arc::new(move |at| {
+                let _ = clock_tx.send(at);
+            }),
+            frame_offset: Duration::ZERO,
+            duration,
+        };
+        instance
+            .start_preview_playback(PREVIEW_FPS, XY::new(640, 360), PREVIEW_FPS, preview)
+            .await
+            .unwrap();
+        let (start, stop) = tokio::time::timeout(Duration::from_secs(15), async {
+            (
+                clock_rx.recv_async().await.unwrap(),
+                clock_rx.recv_async().await.unwrap(),
+            )
+        })
+        .await
+        .expect("silent preview should start and reach its end");
+        assert_eq!(stop.saturating_duration_since(start), duration);
+        let frames: Vec<_> = frame_rx.try_iter().collect();
+        assert!(
+            frames
+                .iter()
+                .any(|frame| *frame > PREVIEW_FPS && *frame < PREVIEW_FPS * 2)
+        );
+        instance.dispose().await;
+    });
+}

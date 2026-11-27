@@ -1,3 +1,8 @@
+//! [INPUT]: 系统窗口、录制会话和编辑器事件。
+//! [OUTPUT]: 窗口生命周期及按播放请求传递的引擎停止事件。
+//! [POS]: 连接原生窗口与后台媒体任务。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 //! Multi-window orchestration -- the `windows.rs` of the gpui app.
 //!
 //! The registry lives in a global; the recording flow is driven by observing
@@ -6125,11 +6130,11 @@ fn load_editor_project_candidate(
         // delivered on the main thread like every other foreign-thread seam.
         let stopped_instance = instance.clone();
         cx.spawn(async move |cx| {
-            while engine_stopped_rx.recv_async().await.is_ok() {
+            while let Ok(generation) = engine_stopped_rx.recv_async().await {
                 if handle
                     .update(cx, |view, window, cx| {
                         if view.is_instance(&stopped_instance) {
-                            view.engine_stopped(window, cx);
+                            view.engine_stopped(generation, window, cx);
                         }
                     })
                     .is_err()
