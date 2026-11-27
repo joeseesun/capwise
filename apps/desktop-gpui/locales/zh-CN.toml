@@ -3224,6 +3224,7 @@ still_open = "灵录仍在运行"
 unconfirmed = "无法确认录制已停止，已取消退出。灵录将保持打开。请点击“停止”，然后再次尝试退出。"
 
 [dialog.update]
+exit_timed_out = "灵录未能及时退出，当前版本可以继续使用。请稍后重试更新。"
 already_getting = "灵录已在准备版本 {version}。"
 available = "灵录 {version} 版本现已推出。灵录会在后台下载，并在可以安装时通知你。"
 busy = "请先完成录制、导出、上传、导入或转写任务，再更新灵录。"

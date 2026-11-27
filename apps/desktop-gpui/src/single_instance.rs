@@ -1,3 +1,8 @@
+//! [INPUT]: 运行目录、平台进程锁和激活请求。
+//! [OUTPUT]: 单实例启动、激活转发和 macOS 更新排他锁。
+//! [POS]: 主应用与安装进程共享启动互斥。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
@@ -30,6 +35,13 @@ const REOPEN_ACK: u8 = 1;
 
 fn pidfile() -> PathBuf {
     crate::store::app_data_dir().join("cap-gpui.pid")
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn lock_for_update() -> std::io::Result<MacInstanceLock> {
+    MacInstanceLock::acquire(&pidfile().with_extension("lock"))?.ok_or_else(|| {
+        std::io::Error::other("Another Capwise instance started before installation")
+    })
 }
 
 pub fn acquire() {
@@ -138,7 +150,7 @@ fn is_cap_gpui_image(path: &Path) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-struct MacInstanceLock {
+pub(crate) struct MacInstanceLock {
     file: std::fs::File,
     owner_pid: libc::pid_t,
 }

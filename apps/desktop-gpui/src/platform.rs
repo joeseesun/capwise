@@ -1,4 +1,8 @@
 //! Native window treatment gpui does not expose.
+//! [INPUT]: GPUI 窗口与系统平台 API。
+//! [OUTPUT]: 原生窗口、对话框和可撤回的退出授权。
+//! [POS]: 应用退出协调器通过本模块请求系统退出。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
 //!
 //! The Tauri app gives its windows their panel behavior in
 //! `apps/desktop/src-tauri/src/windows.rs`: converted to NSPanel via
@@ -1058,6 +1062,14 @@ mod mac {
     pub fn permit_native_quit() {
         if let Some(requests) = NATIVE_QUIT_REQUESTS.get() {
             requests.permit_exit();
+        }
+    }
+
+    pub fn revoke_native_quit() {
+        if let Some(requests) = NATIVE_QUIT_REQUESTS.get() {
+            requests
+                .permitted
+                .store(false, std::sync::atomic::Ordering::Release);
         }
     }
 

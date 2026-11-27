@@ -1,3 +1,8 @@
+//! [INPUT]: 发布清单、签名密钥、更新归档和现有应用。
+//! [OUTPUT]: 验签下载、补丁重建和平台安装。
+//! [POS]: 应用进程准备更新，macOS 安装进程执行替换。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use std::{
     collections::HashMap,
     io::{Read as _, Write as _},
@@ -489,6 +494,11 @@ fn check_rebuilt_app(app: &Path, installed: &Path) -> Result<(), String> {
         .arg("-cr")
         .arg(app)
         .status();
+    verify_replacement_signature(app, installed)
+}
+
+#[cfg(target_os = "macos")]
+fn verify_replacement_signature(app: &Path, installed: &Path) -> Result<(), String> {
     let verified = std::process::Command::new("/usr/bin/codesign")
         .args(["--verify", "--deep", "--strict"])
         .arg(app)
@@ -496,13 +506,13 @@ fn check_rebuilt_app(app: &Path, installed: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     if !verified.status.success() {
         return Err(format!(
-            "The rebuilt app failed code signature verification: {}",
+            "The update failed code signature verification: {}",
             String::from_utf8_lossy(&verified.stderr).trim()
         ));
     }
     let requirement = designated_requirement(installed)?;
     if !satisfies_requirement(app, &requirement)? {
-        return Err("The rebuilt app is not signed like the installed one".to_string());
+        return Err("The update is not signed like the installed app".to_string());
     }
     Ok(())
 }
@@ -669,8 +679,38 @@ async fn stream_to_file(
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn install_app_bundle(archive: &Path, running: &Path) -> Result<PathBuf, String> {
-    install_app_bundle_in(archive, running, Path::new("/Applications"))
+pub(crate) fn verify_update_source(
+    running: &Path,
+    package: &Path,
+    version: &Version,
+) -> Result<(), String> {
+    let requirement = designated_requirement(&running_app_bundle()?)?;
+    if !satisfies_requirement(running, &requirement)? {
+        return Err("The installed app is not signed like the installer".to_string());
+    }
+    check_artifact_kind(package, ArtifactKind::AppArchive)?;
+    if package.is_dir()
+        && package
+            != std::path::absolute(
+                staging_root()
+                    .join(STAGING_SLUG)
+                    .join(version.to_string())
+                    .join(DELTA_APP_NAME),
+            )
+            .map_err(|error| error.to_string())?
+    {
+        return Err("The rebuilt update is outside the update cache".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn install_app_bundle(
+    archive: &Path,
+    running: &Path,
+    version: &Version,
+) -> Result<PathBuf, String> {
+    install_app_bundle_in(archive, running, Path::new("/Applications"), version)
 }
 
 #[cfg(target_os = "macos")]
@@ -678,6 +718,7 @@ fn install_app_bundle_in(
     archive: &Path,
     running: &Path,
     applications: &Path,
+    version: &Version,
 ) -> Result<PathBuf, String> {
     let relocate = read_only_volume(running).map_err(|error| error.to_string())?;
     let destination = if relocate {
@@ -699,11 +740,16 @@ fn install_app_bundle_in(
     };
 
     let unpacked = if archive.is_dir() {
-        move_app_into(archive, &staging)
+        verify_replacement_signature(archive, running)
+            .and_then(|()| move_app_into(archive, &staging))
     } else {
         extract_app_archive(archive, &staging)
     };
     let installed = unpacked.and_then(|app| {
+        verify_replacement_signature(&app, running)?;
+        if macos_bundle_version(&app)? != *version {
+            return Err("The update bundle version does not match the release".to_string());
+        }
         if relocate && can_reuse_installed_app(&app, &destination)? {
             return Ok(());
         }
@@ -1616,7 +1662,7 @@ mod tests {
         check_artifact_kind(&package, ArtifactKind::AppArchive).unwrap();
 
         let applications = root.join("Applications");
-        let result = install_app_bundle_in(&package, &installed, &applications).unwrap();
+        let result = install_app_bundle_in(&package, &installed, &applications, &to).unwrap();
         assert_eq!(result, installed);
         assert!(!package.exists());
         assert!(

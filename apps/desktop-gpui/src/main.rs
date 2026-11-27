@@ -1,4 +1,8 @@
 //! Cap desktop, rewritten in gpui.
+//! [INPUT]: 启动参数和桌面运行环境。
+//! [OUTPUT]: 启动桌面应用或独立安装进程。
+//! [POS]: 安装进程在加载 GUI 和获取主实例锁前分流。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
 //!
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -93,6 +97,8 @@ mod linux_wallpaper;
 mod llm;
 mod local_agents;
 mod local_qwen;
+#[cfg(target_os = "macos")]
+mod macos_update;
 mod main_window;
 mod media_access;
 mod menus;
@@ -365,6 +371,11 @@ fn app_runtime() -> tokio::runtime::Runtime {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    if let Some(status) = macos_update::run_from_args() {
+        std::process::exit(status);
+    }
+
     perf_marks::start();
     #[cfg(target_os = "linux")]
     if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {

@@ -5,6 +5,7 @@
 - 更新清单：`https://github.com/joeseesun/capwise/releases/latest/download/latest.json`（总是指向最新一个**已发布**的 Release，草稿和预发布不算）。
 - 更新包：Mac 使用 `.app.tar.gz`，Windows x64 使用 NSIS `.exe`，Ubuntu 24.04 x64 使用 `.deb`。每个包用 minisign 签名，签名放在 `latest.json` 里。App 只接受 `packaging/updater.pub` 这把公钥签过的包。
 - App 启动 10 秒后检查一次，之后每 6 小时检查一次。正在录制、导出、导入或转写时不会弹窗，等任务结束再提示；"更新下载"设为"从不"时只响应手动检查。可在「关于」页检查更新。只有一个稳定通道，没有 nightly。
+- macOS 安装进程等待旧进程完全退出，再持单实例锁替换应用。等待超过 45 秒就保留旧版和已下载的更新。安装失败时尝试重新打开旧版，增量包失败后再检查更新会下载整包。
 
 `latest.json` 的格式：
 

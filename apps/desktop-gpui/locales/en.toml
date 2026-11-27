@@ -3226,6 +3226,7 @@ still_open = "Capwise is still open"
 unconfirmed = "Quit canceled because recording shutdown could not be confirmed. Capwise will stay open. Use Stop, then try Quit again."
 
 [dialog.update]
+exit_timed_out = "Capwise took too long to close. Your current version is still available. Try updating again later."
 already_getting = { text = "Capwise is already getting version {version} ready.", context = "{version} is a version number such as 0.6.2." }
 available = { text = "Version {version} of Capwise is available. Capwise will download it in the background and let you know when it's ready to install.", context = "{version} is a version number such as 0.6.2." }
 busy = "Finish your recording, export, upload, import, or transcription task before updating Capwise."

@@ -3170,6 +3170,7 @@ still_open = "Capwise ist noch geöffnet"
 unconfirmed = "Beenden abgebrochen, weil nicht bestätigt werden konnte, dass die Aufnahme beendet wurde. Capwise bleibt geöffnet. Verwenden Sie „Stoppen“ und beenden Sie Capwise dann erneut."
 
 [dialog.update]
+exit_timed_out = "Capwise konnte nicht rechtzeitig beendet werden. Die aktuelle Version bleibt verfügbar. Versuche das Update später erneut."
 already_getting = "Capwise bereitet Version {version} bereits vor."
 available = "Version {version} von Capwise ist verfügbar. Capwise lädt sie im Hintergrund herunter und informiert Sie, sobald sie installiert werden kann."
 busy = "Schließen Sie Ihre Aufnahme, Ihren Export, Upload, Import oder Ihre Transkription ab, bevor Sie Capwise aktualisieren."

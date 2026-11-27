@@ -1,5 +1,9 @@
 //! The macOS app menu bar, the window shortcuts behind it, and the dock-icon
 //! policy.
+//! [INPUT]: 更新状态、录制会话和待保存的编辑器。
+//! [OUTPUT]: 应用菜单和可取消的退出流程。
+//! [POS]: 确认资料已保存，再请求原生退出。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
 //!
 //! Three things that are really one thing on macOS: the menu bar only exists
 //! while the app is `NSApplicationActivationPolicyRegular`, ⌘W has to mean
@@ -70,9 +74,9 @@ impl UpdateRow {
             UpdateStatus::Downloading { .. } | UpdateStatus::Installing { .. } => {
                 tr::menu::update::downloading()
             }
-            UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. } => {
-                tr::menu::update::restart()
-            }
+            UpdateStatus::Ready { .. } => tr::menu::update::restart(),
+            #[cfg(any(not(target_os = "macos"), test))]
+            UpdateStatus::Installed { .. } => tr::menu::update::restart(),
         };
         Self {
             title,
@@ -102,8 +106,9 @@ fn update_menu_badge(status: &updates::UpdateStatus) -> Option<String> {
         UpdateStatus::Available { version }
         | UpdateStatus::Downloading { version, .. }
         | UpdateStatus::Ready { version }
-        | UpdateStatus::Installing { version }
-        | UpdateStatus::Installed { version, .. } => Some(tr::menu::update::badge_version(version)),
+        | UpdateStatus::Installing { version } => Some(tr::menu::update::badge_version(version)),
+        #[cfg(test)]
+        UpdateStatus::Installed { version, .. } => Some(tr::menu::update::badge_version(version)),
         UpdateStatus::Idle | UpdateStatus::Checking => None,
     }
 }
@@ -674,6 +679,14 @@ impl Global for QuitCoordinator {}
 pub(crate) fn recording_start_allowed(cx: &App) -> bool {
     cx.try_global::<QuitCoordinator>()
         .is_none_or(|coordinator| coordinator.gate.recording_start_allowed())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn cancel_update_exit(cx: &mut App) {
+    if cx.has_global::<QuitCoordinator>() {
+        cx.global_mut::<QuitCoordinator>().gate.cancel_exit();
+        platform::revoke_native_quit();
+    }
 }
 
 fn quit_phase(phase: Phase, ui_cleanup_pending: bool) -> Phase {
