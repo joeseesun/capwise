@@ -1,5 +1,5 @@
 //! [INPUT]: 合成麦克风、临时工程和配音时钟。
-//! [OUTPUT]: 配音同步及恢复回归测试。
+//! [OUTPUT]: 配音同步、恢复和混音电平回归测试。
 //! [POS]: 验证因倒数、暂停或中断产生的时间边界。
 //! [PROTOCOL]: Update this header on change, then check AGENTS.md
 
@@ -718,16 +718,25 @@ fn voiceover_levels_reject_silence_and_limit_gain() {
         peak_db: Some(peak_db),
         rms_db: Some(rms_db),
     };
-    assert_eq!(audio.suggested_gain_db(), None);
-    audio.peak_db = Some(-26.6);
-    audio.rms_db = Some(-42.8);
-    assert!((audio.suggested_gain_db().unwrap() - 20.6).abs() < 0.01);
-    audio.peak_db = Some(-55.0);
-    assert_eq!(audio.suggested_gain_db(), Some(24.0));
+    assert_eq!(audio.initial_gain_db(), 0.0);
+    audio.peak_db = Some(-15.7);
+    audio.rms_db = Some(-35.8);
+    assert!((audio.initial_gain_db() - 15.7).abs() < 0.01);
+    audio.channels = 2;
+    assert!((audio.initial_gain_db() - 12.7).abs() < 0.01);
+    audio.peak_db = Some(-43.0);
+    audio.rms_db = Some(-51.0);
+    assert_eq!(audio.initial_gain_db(), 24.0);
+    audio.peak_db = Some(-35.0);
+    audio.rms_db = Some(-70.0);
+    assert_eq!(audio.initial_gain_db(), 0.0);
+    audio.rms_db = Some(-34.0);
     audio.peak_db = Some(-1.0);
-    assert_eq!(audio.suggested_gain_db(), Some(-5.0));
+    assert_eq!(audio.initial_gain_db(), 0.0);
     audio.peak_db = Some(f32::NAN);
-    assert_eq!(audio.suggested_gain_db(), None);
+    assert_eq!(audio.initial_gain_db(), 0.0);
+    audio.peak_db = None;
+    assert_eq!(audio.initial_gain_db(), 0.0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -739,8 +748,68 @@ async fn voiceover_quiet_input_is_measured_without_extra_attenuation() {
     end_source(end, task).await;
     let rms = take.audio().rms_db.unwrap();
     assert!((-46.0..-41.0).contains(&rms), "rms={rms}");
-    assert_eq!(take.audio().suggested_gain_db(), Some(24.0));
     let before = fs::read(take.path()).unwrap();
-    let _ = take.audio().suggested_gain_db();
+    let gain = take.audio().initial_gain_db();
+    assert!(gain > 20.0);
+
+    let mut config = read_saved_project(project.path()).unwrap();
+    let segment = crate::editor_edits::default_audio_segment(
+        0.0,
+        take.audio().duration,
+        0,
+        take.relative_path(),
+        "Voiceover".into(),
+        Some(take.audio().duration),
+    );
+    config
+        .timeline
+        .as_mut()
+        .unwrap()
+        .audio_segments
+        .push(segment);
+    let music = cap_editor::load_music_tracks_uncached(&config, project.path());
+    let mut renderer = cap_editor::AudioRenderer::new(Vec::new()).with_music(music.clone());
+    let render_peak = |renderer: &mut cap_editor::AudioRenderer,
+                       config: &cap_project::ProjectConfiguration| {
+        renderer.set_playhead(0.0, config);
+        let (_, samples) = renderer.render_frame_raw(4096, config).unwrap();
+        samples
+            .iter()
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+    };
+    let quiet_peak = render_peak(&mut renderer, &config);
+    config.timeline.as_mut().unwrap().audio_segments[0].volume_db = gain;
+    let mixed_peak = render_peak(&mut renderer, &config);
+    assert!(quiet_peak > 0.0);
+    assert!((mixed_peak / quiet_peak - 10.0_f32.powf(gain / 20.0)).abs() < 0.01);
+
+    let (samples_tx, samples_rx) = std::sync::mpsc::channel();
+    let output = cap_editor::AudioOutput::new_headless(Box::new(move |samples, _| {
+        let peak = samples
+            .iter()
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+        if peak > 0.0 {
+            let _ = samples_tx.send(peak);
+        }
+    }));
+    let (_clock_tx, playhead_rx) = watch::channel(0.0);
+    let started = output
+        .play(cap_editor::PlaySpec {
+            segments: Vec::new(),
+            music,
+            project: config,
+            duration_secs: take.audio().duration,
+            start_playhead_secs: 0.0,
+            playhead_rx,
+            preview_speed: cap_editor::PreviewSpeedHandle::default(),
+        })
+        .unwrap();
+    assert!(
+        (0..12)
+            .map_while(|_| samples_rx.recv_timeout(Duration::from_secs(2)).ok())
+            .any(|peak| peak > quiet_peak * 8.0)
+    );
+    output.stop_playback(started);
+    output.shutdown();
     assert_eq!(fs::read(take.path()).unwrap(), before);
 }
