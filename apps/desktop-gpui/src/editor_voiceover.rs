@@ -1,5 +1,5 @@
 //! [INPUT]: 编辑器时间线、麦克风输入、配音素材。
-//! [OUTPUT]: 配音控件、同步录音和自动落轨。
+//! [OUTPUT]: 配音控件、同步录音和带初始增益的自动落轨。
 //! [POS]: 协调预览时钟与可恢复配音素材。
 //! [PROTOCOL]: Update this header on change, then check AGENTS.md
 
@@ -435,9 +435,6 @@ impl EditorWindow {
             return;
         };
         let replacement = panel.replacement.clone();
-        let gain = replacement
-            .as_ref()
-            .map_or(0.0, |segment| segment.volume_db);
         self.stop_playback(cx);
         self.library_audition = None;
         let Some((mut lane, mut range)) = audio_destination(
@@ -483,8 +480,7 @@ impl EditorWindow {
                             ) {
                                 return false;
                             }
-                            let segment = &mut timeline.audio_segments[index];
-                            segment.volume_db = gain;
+                            let segment = &timeline.audio_segments[index];
                             lane = segment.track;
                             range = segment.start..segment.end;
                             true
@@ -508,7 +504,7 @@ impl EditorWindow {
                         take.audio().duration,
                         range.start,
                         Some(lane),
-                        gain,
+                        take.audio().initial_gain_db(),
                         window,
                         cx,
                     )?;

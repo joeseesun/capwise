@@ -1,5 +1,5 @@
 //! [INPUT]: 麦克风采样、共享预览时钟和工程目录。
-//! [OUTPUT]: 可恢复的配音素材及其录制状态。
+//! [OUTPUT]: 可恢复的配音素材、录制状态和落轨增益。
 //! [POS]: 管理配音采样的开始、暂停和落盘。
 //! [PROTOCOL]: Update this header on change, then check AGENTS.md
 
@@ -28,6 +28,9 @@ const VERSION: u32 = 1;
 const MANIFEST_LIMIT: u64 = 16 * 1024;
 const CAPTURE_LIMIT: u64 = 8 * 1024 * 1024 * 1024;
 const CAPTURE: &str = "capture.m4a";
+const VOICEOVER_TARGET_RMS_DB: f32 = -20.0;
+const VOICEOVER_PEAK_CEILING_DB: f32 = -3.0;
+const VOICEOVER_MAX_GAIN_DB: f32 = 24.0;
 const MANIFEST: &str = "take.json";
 const LEASE: &str = "lease.lock";
 
@@ -66,11 +69,18 @@ pub struct TakeAudio {
 }
 
 impl TakeAudio {
-    pub fn suggested_gain_db(&self) -> Option<f32> {
-        let peak = self.peak_db?;
-        let rms = self.rms_db?;
-        (peak.is_finite() && rms.is_finite() && rms > -65.0 && peak > -60.0)
-            .then(|| (-6.0 - peak).clamp(-12.0, 24.0))
+    pub fn initial_gain_db(&self) -> f32 {
+        let (Some(peak), Some(rms)) = (self.peak_db, self.rms_db) else {
+            return 0.0;
+        };
+        if !peak.is_finite() || !rms.is_finite() || rms <= -55.0 || peak <= -50.0 {
+            return 0.0;
+        }
+        // 时间线将单声道配音衰减 3 dB 后送入左右声道。
+        let mix_peak = peak - if self.channels == 1 { 3.0 } else { 0.0 };
+        (VOICEOVER_TARGET_RMS_DB - rms)
+            .min(VOICEOVER_PEAK_CEILING_DB - mix_peak)
+            .clamp(0.0, VOICEOVER_MAX_GAIN_DB)
     }
 }
 
@@ -1275,14 +1285,15 @@ fn validate_audio(path: &Path) -> Result<TakeAudio> {
     if samples == 0 {
         bail!("Voiceover contains no decodable samples");
     }
+    let (peak_db, rms_db) = levels.db();
     Ok(TakeAudio {
         file: String::new(),
         duration: samples as f64 / f64::from(sample_rate),
         sample_rate,
         channels,
         recovered: false,
-        peak_db: Some(levels.db().0),
-        rms_db: Some(levels.db().1),
+        peak_db: Some(peak_db),
+        rms_db: Some(rms_db),
     })
 }
 
