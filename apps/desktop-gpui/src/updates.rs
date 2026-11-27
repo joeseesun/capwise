@@ -1,3 +1,8 @@
+//! [INPUT]: 更新清单、已验证的更新包和当前工作状态。
+//! [OUTPUT]: 检查、下载和安排安装重启。
+//! [POS]: 保存工程后将 macOS 更新交给独立安装进程。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
+
 use std::{path::PathBuf, time::Duration};
 
 use futures_util::future::{Either, select};
@@ -38,6 +43,7 @@ pub(crate) enum UpdateStatus {
     },
     /// On disk and waiting only for the restart, which work started while the
     /// installer waited on an administrator prompt holds back.
+    #[cfg(any(not(target_os = "macos"), test))]
     Installed {
         version: Version,
         executable: PathBuf,
@@ -138,7 +144,12 @@ pub(crate) fn check_manually(cx: &mut App) {
     }
 
     match status(cx) {
-        UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. } => {
+        UpdateStatus::Ready { .. } => {
+            prompt_restart(cx);
+            return;
+        }
+        #[cfg(any(not(target_os = "macos"), test))]
+        UpdateStatus::Installed { .. } => {
             prompt_restart(cx);
             return;
         }
@@ -585,9 +596,11 @@ fn update_failed(message: &str, cx: &mut App) {
 }
 
 fn prompt_restart(cx: &mut App) {
-    let (UpdateStatus::Ready { version } | UpdateStatus::Installed { version, .. }) = status(cx)
-    else {
-        return;
+    let version = match status(cx) {
+        UpdateStatus::Ready { version } => version,
+        #[cfg(any(not(target_os = "macos"), test))]
+        UpdateStatus::Installed { version, .. } => version,
+        _ => return,
     };
     if work_in_flight(cx) {
         tracing::info!(%version, "update ready; waiting for in-flight work before prompting");
@@ -619,10 +632,13 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
         return;
     }
     let status = status(cx);
-    if !matches!(
-        status,
-        UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. }
-    ) {
+    let ready = match status {
+        UpdateStatus::Ready { .. } => true,
+        #[cfg(any(not(target_os = "macos"), test))]
+        UpdateStatus::Installed { .. } => true,
+        _ => false,
+    };
+    if !ready {
         return;
     }
     if work_in_flight(cx) {
@@ -637,6 +653,7 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
         return;
     }
     let version = match status {
+        #[cfg(any(not(target_os = "macos"), test))]
         UpdateStatus::Installed {
             version,
             executable,
@@ -662,7 +679,75 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
         },
         cx,
     );
-    let failed_package = package.clone();
+    start_install(package, kind, version, cx);
+}
+
+#[cfg(target_os = "macos")]
+fn start_install(package: PathBuf, kind: ArtifactKind, version: Version, cx: &mut App) {
+    let worker = installer::check_artifact_kind(&package, kind)
+        .and_then(|()| crate::macos_update::launch(&package, &version));
+    let mut worker = match worker {
+        Ok(worker) => worker,
+        Err(error) => {
+            set_status(
+                UpdateStatus::Ready {
+                    version: version.clone(),
+                },
+                cx,
+            );
+            tracing::error!(%version, %error, "could not launch the macOS update installer");
+            cx.spawn(async move |_| {
+                crate::platform::alert_dialog(
+                    tr::dialog::update::title(),
+                    &tr::dialog::update::install_failed(&version, error),
+                );
+            })
+            .detach();
+            return;
+        }
+    };
+    crate::menus::quit(cx);
+    cx.spawn(async move |cx| {
+        let status = loop {
+            match worker.try_wait() {
+                Ok(None) => {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(250))
+                        .await
+                }
+                other => break other,
+            }
+        };
+        cx.update(|cx| {
+            crate::menus::cancel_update_exit(cx);
+            set_status(
+                UpdateStatus::Ready {
+                    version: version.clone(),
+                },
+                cx,
+            );
+            tracing::warn!(
+                ?status,
+                "macOS update installer returned while Capwise is still running"
+            );
+            let detail = if status.ok().flatten().and_then(|status| status.code())
+                == Some(i32::from(crate::macos_update::TIMED_OUT))
+            {
+                tr::dialog::update::exit_timed_out().to_string()
+            } else {
+                tr::dialog::update::ready(&version)
+            };
+            cx.spawn(async move |_| {
+                crate::platform::alert_dialog(tr::dialog::update::title(), &detail);
+            })
+            .detach();
+        });
+    })
+    .detach();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_install(package: PathBuf, kind: ArtifactKind, version: Version, cx: &mut App) {
     cx.spawn(async move |cx| {
         let applied = cx
             .background_executor()
@@ -676,10 +761,6 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
             }
             Err(error) => {
                 tracing::error!(%version, "update install failed: {error}");
-                #[cfg(target_os = "macos")]
-                installer::discard_patched_update(&failed_package);
-                #[cfg(not(target_os = "macos"))]
-                drop(failed_package);
                 cx.global_mut::<UpdateScheduler>().staged = None;
                 update_failed(&tr::dialog::update::install_failed(&version, error), cx);
             }
@@ -691,6 +772,7 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
 /// The install can sit behind an administrator prompt for as long as the user
 /// leaves it, so anything started meanwhile defers the restart to a prompt
 /// that waits for Capwise to be idle.
+#[cfg(not(target_os = "macos"))]
 fn restart_after_install(version: Version, executable: PathBuf, cx: &mut App) {
     let deferred = if work_in_flight(cx) {
         tracing::info!(%version, "update installed; waiting for in-flight work before restarting");
@@ -715,6 +797,7 @@ fn restart_after_install(version: Version, executable: PathBuf, cx: &mut App) {
     relaunch_into(&version, &executable, cx);
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn relaunch_into(version: &Version, executable: &std::path::Path, cx: &mut App) {
     tracing::info!(%version, "update installed; relaunching");
     if let Err(error) = crate::permissions::relaunch_executable(executable, cx) {
@@ -723,26 +806,10 @@ fn relaunch_into(version: &Version, executable: &std::path::Path, cx: &mut App) 
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn apply(package: &std::path::Path, kind: ArtifactKind) -> Result<Option<PathBuf>, String> {
     installer::check_artifact_kind(package, kind)?;
     apply_package(package, kind)
-}
-
-#[cfg(target_os = "macos")]
-fn apply_package(
-    package: &std::path::Path,
-    _kind: ArtifactKind,
-) -> Result<Option<PathBuf>, String> {
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let bundle = executable
-        .ancestors()
-        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
-        .ok_or_else(|| "This copy of Capwise isn't running from an app bundle".to_string())?;
-    let executable_in_bundle = executable
-        .strip_prefix(bundle)
-        .map_err(|error| error.to_string())?;
-    let installed = installer::install_app_bundle(package, bundle)?;
-    Ok(Some(installed.join(executable_in_bundle)))
 }
 
 #[cfg(windows)]

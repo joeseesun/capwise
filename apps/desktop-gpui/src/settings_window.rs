@@ -1,4 +1,8 @@
 //! The settings window: sidebar, General page, Tauri-compatible store.
+//! [INPUT]: 设置存储和更新状态。
+//! [OUTPUT]: 显示设置并提供检查更新和重新启动入口。
+//! [POS]: 更新按钮调用更新调度器。
+//! [PROTOCOL]: Update this header on change, then check AGENTS.md
 //!
 //! Transcribed from `apps/desktop/src/routes/(window-chrome)/settings.tsx`
 //! (the shell), `settings/general.tsx` (the page), `settings/Setting.tsx` (the
@@ -2277,7 +2281,11 @@ impl SettingsWindow {
             UpdateStatus::Downloading { version, .. } => {
                 (tr::settings::sidebar::downloading(version), false)
             }
-            UpdateStatus::Ready { version } | UpdateStatus::Installed { version, .. } => {
+            UpdateStatus::Ready { version } => {
+                (tr::settings::sidebar::restart_to_update(version), true)
+            }
+            #[cfg(any(not(target_os = "macos"), test))]
+            UpdateStatus::Installed { version, .. } => {
                 (tr::settings::sidebar::restart_to_update(version), true)
             }
             UpdateStatus::Installing { version } => {
